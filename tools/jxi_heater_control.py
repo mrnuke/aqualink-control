@@ -15,7 +15,13 @@ import serial_asyncio
 from aquaproto import AqualinkProtocol
 
 JXI_RS485_DEV_ADDR = 0x68
+JXI_CTL_POOL = 0x01
+JXI_CTL_SPA = 0x02
 JXI_CTL_CELSIUS = 0x04
+JXI_CTL_HEATER_ON = 0x08
+JXI_CTL_TEMP3_VALID = 0x10
+# Internal five-minute timeout. Not part of the protocol
+JXI_KEEPALIVE_TIMEOUT=300
 
 packet_def = {
     0x00 : { "name" : "probe", "fields" : [ ] },
@@ -122,6 +128,7 @@ class Heater(AqualinkProtocol):
             "pool" : 20,
             "spa" : 35
         }
+        self._heater_off_time = None
         super().__init__()
 
     def _control_packet(self):
@@ -136,6 +143,15 @@ class Heater(AqualinkProtocol):
     def _format_status(self, _):
         pretty = pprint.PrettyPrinter(indent=4)
         return pretty.pformat(self._status) + '\n'
+
+    def _encode_temperature(self, temp):
+        # 0xe0 -> 0xff, negative temperature
+        # 0x00 -> 0xdf, positive temperature
+        raw_temp = int(temp)
+        if raw_temp < -0x20 or raw_temp >= 0xe0:
+            raise OverflowError(f'Cannot represent temperature {temp}')
+
+        return raw_temp if raw_temp >= 0 else raw_temp + 0x100
 
     async def decoder_loop(self, monitor_only):
         '''Decode incoming packets until closed. (asyncio)'''
@@ -164,6 +180,109 @@ class Heater(AqualinkProtocol):
 
                 await asyncio.sleep(1)
 
+    def _parse_setpoint_change(self, verbs):
+        mode = verbs.pop(0)
+        new_setpoint = verbs.pop(0)
+
+        if not mode in self.setpoint:
+            raise ValueError('Use "pool" or "spa" + temp')
+
+        temp = int(new_setpoint[:-1])
+
+        if new_setpoint.endswith('F'):
+            temp = (temp - 32) * 5.0 / 9.0
+        elif new_setpoint.endswith('C'):
+            # Might want to use Fahrenheit scale, as it gives better resolution
+            # Right now, Celsius is easier for debugging
+            pass
+        else:
+            raise ValueError('Need to specify "F" or "C" scale with temperature')
+
+        self.setpoint[mode] = self._encode_temperature(temp)
+
+    def _heater_keepalive_timeout(self):
+        loop = asyncio.get_running_loop()
+
+        if loop.time() >= self._heater_off_time:
+            print("Heater keepalive timed out! Shutting off!")
+            self._ctl_byte &= ~JXI_CTL_HEATER_ON
+            self._heater_off_time = None
+        else:
+            # Defer turning off heater
+            loop.call_at(self._heater_off_time, self._heater_keepalive_timeout)
+
+
+    def _main_heater_turn_on(self):
+        '''Somebody set up us the gas'''
+        old_timeout = self._heater_off_time
+        loop = asyncio.get_running_loop()
+        self._heater_off_time = loop.time() + JXI_KEEPALIVE_TIMEOUT
+
+        if not old_timeout:
+            loop.call_at(self._heater_off_time, self._heater_keepalive_timeout)
+
+        # Preparations are done. Enable the heater on the next control packet
+        self._ctl_byte |= JXI_CTL_HEATER_ON
+
+    def _main_heater_turn_off(self):
+        '''Somebody cut up us the gas'''
+        # Ignore any pending timeouts, as they will just reset themselves
+        self._ctl_byte &= ~JXI_CTL_HEATER_ON
+
+    def _parse_heater_mode(self, verbs):
+        while verbs:
+            verb = verbs.pop(0)
+            msg = None
+
+            if verb == "spa":
+                self._ctl_byte |= JXI_CTL_POOL
+                self._ctl_byte &= ~JXI_CTL_POOL
+            elif verb == "pool":
+                self._ctl_byte &= ~JXI_CTL_POOL
+                self._ctl_byte |= JXI_CTL_POOL
+            elif verb == "on":
+                self._main_heater_turn_on()
+                msg = f"Staring heater. Timeout in {JXI_KEEPALIVE_TIMEOUT} sec."
+                msg += ' Re-send "on" command periodically to reset timeout.'
+            elif verb == "off":
+                self._main_heater_turn_off()
+            else:
+                raise ValueError(f"Unknown parameter {verb}")
+
+        return msg
+
+    async def sock_client_connected_cb(self, reader, writer):
+        '''Somebody wants to talk over the socket interface'''
+        writer.write('aquaplay socket interface.\n'.encode())
+
+        sock_cmds = {
+            'setpoint' : self._parse_setpoint_change,
+            'heater' : self._parse_heater_mode,
+            'status' : self._format_status,
+            'help' : lambda _ : 'commands: ' + ' '.join(sock_cmds.keys())
+        }
+
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+
+            try:
+                verbs = line.decode().split()
+                command = verbs.pop(0)
+
+                if command in sock_cmds:
+                    reply = sock_cmds[command](verbs)
+                    if reply:
+                        writer.write(reply.encode())
+                else:
+                    writer.write(f'unknown command {command}'.encode())
+
+            except (ArithmeticError, ValueError, IndexError) as err:
+                writer.write(str(err).encode())
+
+        writer.close()
+
     def signal_shutdown(self, _, __):
         '''Signal handler to be used with signal.signal()'''
         self.closed = True
@@ -172,10 +291,22 @@ class Heater(AqualinkProtocol):
 
 async def main(args):
     '''asyncio main. Why asyncio? Why not?'''
+    socket_path = '/tmp/aquaheat.sock'
     loop = asyncio.get_event_loop()
 
     _, heater = await serial_asyncio.create_serial_connection(loop,
                                     Heater, args.tty, baudrate=9600)
+
+    if not args.monitor_only:
+        try:
+            await asyncio.start_unix_server(heater.sock_client_connected_cb,
+                                        path=socket_path)
+
+            print(f'UNIX socket interface at "{socket_path}"')
+            print(f'For details, run "echo status | nc -U {socket_path}""')
+        except OSError as err:
+            print(f'Uh oh! {err}')
+            return
 
     signal.signal(signal.SIGINT, heater.signal_shutdown)
 
