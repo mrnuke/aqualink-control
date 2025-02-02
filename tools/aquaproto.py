@@ -9,6 +9,8 @@ an RS-485 bus and prints any aqualink packets.
 import asyncio
 import datetime
 from sys import argv
+
+#pylint: disable=import-error
 import serial_asyncio
 
 class AqualinkProtocol(asyncio.Protocol):

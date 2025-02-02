@@ -11,6 +11,7 @@ from datetime import datetime
 import pprint
 import signal
 
+#pylint: disable=import-error
 import serial_asyncio
 from aquaproto import AqualinkProtocol
 
