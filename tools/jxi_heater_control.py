@@ -187,9 +187,16 @@ class Heater(AqualinkProtocol):
                     decode_packet(probe_pkt, self._status)
                 else:
                     probe_pkt = bytes([JXI_RS485_DEV_ADDR, cmd])
-                self.write_packet(probe_pkt)
+                await self.write_packet(probe_pkt)
 
                 await asyncio.sleep(1)
+
+    async def modbus_poop_loop(self):
+        '''Send probe packets until closed. (asyncio)'''
+        while not self.closed:
+            pkt = bytes([0x01, 0x03, 0x00, 0x00, 0x00, 0x05]) # [85][C9]
+            await self.write_modbus(pkt)
+            await asyncio.sleep(1)
 
     def _parse_setpoint_change(self, verbs):
         mode = verbs.pop(0)
@@ -336,7 +343,8 @@ async def main(args):
     await asyncio.sleep(0.3)
     await asyncio.gather(
         heater.decoder_loop(args.monitor_only),
-        heater.prober_loop(args.monitor_only)
+        heater.prober_loop(args.monitor_only),
+        heater.modbus_poop_loop(),
     )
 
 if __name__ == "__main__":
