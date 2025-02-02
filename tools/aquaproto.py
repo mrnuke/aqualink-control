@@ -13,6 +13,19 @@ from sys import argv
 #pylint: disable=import-error
 import serial_asyncio
 
+def crc_modbus(data):
+    '''Old and boring 16-bit modbus polynomial CRC'''
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 0x0001:
+                crc >>= 1
+                crc ^= 0xA001
+            else:
+                crc >>= 1
+    return crc.to_bytes(2, 'little')
+
 class AqualinkProtocol(asyncio.Protocol):
     '''Aqualink RS-485 protocol: chunk aqualink stream data into packets'''
     def __init__(self):
@@ -22,6 +35,7 @@ class AqualinkProtocol(asyncio.Protocol):
         self.input_buf = bytearray()
         self.transport = None
         self.closed = False
+        self._lock = asyncio.Lock()
         super().__init__()
 
     def connection_made(self, transport):
@@ -36,6 +50,11 @@ class AqualinkProtocol(asyncio.Protocol):
 
         return read_bytes
 
+    def __is_modbus(self, pkt):
+        # print(pkt[:-2].hex(' '))
+        # print(f'Cricketus {crc_modbus(pkt[:-2]).hex()} lignus {pkt[-2:].hex()}')
+        return pkt[-2:] == crc_modbus(pkt[:-2])
+
     def __packet_search(self):
         while len(self.input_buf) > len(self.header):
             pkt_start_idx = self.input_buf.find(self.header)
@@ -46,7 +65,10 @@ class AqualinkProtocol(asyncio.Protocol):
 
             if pkt_start_idx > 0:
                 dropped_bytes = self.__read(pkt_start_idx)
-                print(f'Dropping bytes {dropped_bytes.hex(" ")}')
+                if self.__is_modbus(dropped_bytes):
+                    print(f'Modbus {dropped_bytes.hex(" ")}')
+                else:
+                    print(f'Dropping bytes {dropped_bytes.hex(" ")}')
 
             pkt_footer_idx = self.input_buf.find(self.footer)
             if pkt_footer_idx < 0:
@@ -65,13 +87,24 @@ class AqualinkProtocol(asyncio.Protocol):
         '''Return a generator that spits out complete packets'''
         return self.__packet_search()
 
-    def write_packet(self, pkt):
+    async def write_packet(self, pkt):
         '''Write a packet. Encoding and checksumming is automatically handled'''
-        csum = (sum(self.header) + sum(pkt)) & 0xff
-        # Payload and checksum bytes must be escaped if 0x10
-        rs485_pkt = (pkt + bytes([csum])).replace(bytes([0x10]), self.escape_seq)
-        rs485_pkt = self.header + rs485_pkt + self.footer
-        self.transport.write(rs485_pkt)
+        async with self._lock:
+            csum = (sum(self.header) + sum(pkt)) & 0xff
+            # Payload and checksum bytes must be escaped if 0x10
+            rs485_pkt = (pkt + bytes([csum])).replace(bytes([0x10]), self.escape_seq)
+            rs485_pkt = self.header + rs485_pkt + self.footer
+            self.transport.write(rs485_pkt)
+
+    async def write_modbus(self, pkt):
+        '''Write a modbus packet, and pray the bus doesn't blow up'''
+        async with self._lock:
+            rs485_pkt = pkt + crc_modbus(pkt)
+            print(f'mbp {rs485_pkt.hex(" ")}')
+            self.transport.write(rs485_pkt)
+            frame_t_delta = 3.5 * (11 / self.transport.serial.baudrate)
+            await asyncio.sleep(frame_t_delta)
+            await asyncio.sleep(0.100)
 
 
 async def main():
