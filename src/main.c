@@ -1,0 +1,245 @@
+/*
+ * Aqualink control - An software aqualink master implementation
+ *
+ * SPDX-License-Identifier: GPL-3.0
+ */
+
+#define ULOG_DEBUG(fmt, ...) ulog(LOG_DEBUG, fmt, ## __VA_ARGS__)
+
+#include "aqualink-internal.h"
+
+#include <errno.h>
+#include <getopt.h>
+#include <linux/serial.h>
+#include <termios.h>
+#include <fcntl.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/ioctl.h>
+
+#include <libubox/ustream.h>
+#include <libubox/ulog.h>
+
+enum aqua_commands {
+	JXI_GET_MEASUREMENTS = 0x25,
+};
+
+struct aqua_ctx {
+	struct ustream_fd stream;
+	struct uloop_timeout probe_again;
+};
+
+static inline uint16_t read16_le(const uint8_t *raw)
+{
+	return (uint16_t)raw[1] << 8 | raw[0];
+}
+
+static void *memfind(const uint8_t *buf, size_t len, const uint8_t needle[2])
+{
+	const uint8_t *next;
+	uint8_t *start;
+
+	do {
+		start = memchr(buf, needle[0], len - 1);
+		if (start && start[1] == needle[1])
+			break;
+
+		next = start + 1;
+		len -= (ptrdiff_t)(next - buf);
+		buf = next;
+	} while(start);
+
+	return start;
+}
+
+static int aqualink_handle_measurements(struct aqua_ctx *ctx,
+					const uint8_t *msg, size_t len)
+{
+	uint16_t gv_on_time, cycles;
+	int temperature;
+
+	if (len < 9)
+		return -ENODATA;
+
+	gv_on_time = read16_le(msg + 2);
+	cycles = read16_le(msg + 4);
+	temperature = (int)msg[8] - 20;
+
+	ULOG_INFO("%d cycles, %d hours, temperature = %d\n", cycles, gv_on_time,
+		 temperature);
+
+	return 0;
+}
+
+static int aqualink_handle_msg(struct aqua_ctx *ctx, const uint8_t *msg,
+			       size_t len)
+{
+	uint8_t cmd;
+	int ret;
+
+	if (len < 2)
+		return -ENODATA;
+
+	cmd = msg[1];
+	switch (cmd) {
+	case JXI_GET_MEASUREMENTS:
+		ret = aqualink_handle_measurements(ctx, msg, len);
+		break;
+	default:
+		ret = -EBADRQC;
+		break;
+	}
+
+	return ret;
+}
+
+static int aqualink_handle_frame(struct aqua_ctx *ctx, uint8_t *frame,
+				 size_t len)
+{
+	uint8_t buf[32];
+	int msg_len;
+
+	msg_len = aqualink_frame_to_msg(buf, frame, len);
+	if (msg_len < 0) {
+		ULOG_ERR("Error decoding frame: %d\n", msg_len);
+		return msg_len;
+	}
+
+	return aqualink_handle_msg(ctx, buf, msg_len);
+}
+
+
+static void rs485_notify_read(struct ustream *s, int bytes)
+{
+	struct ustream_fd *ufd = container_of(s, struct ustream_fd, stream);
+	struct aqua_ctx *ctx = container_of(ufd, struct aqua_ctx, stream);
+	const uint8_t header[] = { 0x10, 0x02 };
+	const uint8_t footer[] = { 0x10, 0x03 };
+	uint8_t *buf, *start, *end;
+	int ret, len, frame_len;
+
+	buf = (uint8_t *)ustream_get_read_buf(s, &len);
+	start = memfind(buf, len, header);
+	if (!start)
+		return;
+
+	len -= (start - buf);
+	end = memfind(buf, len, footer);
+	if (!end) {
+		/* The bytes before the header are junk. */
+		ustream_consume(s, start - buf);
+		return;
+	}
+
+	frame_len = end - start + sizeof(footer);
+	ret = aqualink_handle_frame(ctx, start, frame_len);
+	if (ret) {
+		ULOG_WARN("Unhandled frame (ret=%d)", ret);
+	}
+	ustream_consume(s, end - buf + sizeof(footer));
+}
+
+static void rs485_notify_state(struct ustream *s)
+{
+	if (!s->eof)
+		return;
+
+	ULOG_ERR("tty EOF. shutting down\n");
+	exit(-1);
+}
+
+static int rs485_stream_open(char *path, struct ustream_fd *s)
+{
+	int ret, tty;
+
+	struct termios tio = {
+		.c_oflag = 0,
+		.c_iflag = 0,
+		.c_cflag = B9600 | CS8 | CREAD | CLOCAL,
+		.c_lflag = 0,
+		.c_cc = {
+			[VMIN] = 1,
+		}
+	};
+
+	struct serial_rs485 rs485_cfg = {
+		.flags = SER_RS485_ENABLED | SER_RS485_RTS_ON_SEND,
+	};
+
+	tty = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+	if (tty < 0) {
+		ULOG_ERR("%s: cannot open tty: %s\n", path, strerror(errno));
+		return -errno;
+	}
+
+	ret = tcsetattr(tty, TCSANOW, &tio);
+	if (ret) {
+		ULOG_ERR("Can't configure serial port: %s\n", strerror(errno));
+		return -errno;
+	}
+
+	ret = ioctl (tty, TIOCSRS485, &rs485_cfg);
+	if (ret) {
+		ULOG_ERR("Can't set RS485 mode: %s\n", strerror(errno));
+		return -errno;
+	}
+
+	s->stream.string_data = false;
+	s->stream.notify_read = rs485_notify_read;
+	s->stream.notify_state = rs485_notify_state;
+
+	ustream_fd_init(s, tty);
+	tcflush(tty, TCIFLUSH);
+
+	return 0;
+}
+
+static void probe_bus(struct uloop_timeout *t)
+{
+	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, probe_again);
+	const uint8_t probe[] = {0x68, JXI_GET_MEASUREMENTS};
+	size_t frame_len;
+	uint8_t buf[32];
+
+	frame_len = aqualink_msg_to_frame(buf, probe, sizeof(probe));
+	ustream_write(&ctx->stream.stream, (void *)buf, frame_len, false);
+
+	uloop_timeout_set(t, 2 * 1000);
+}
+
+int main(int argc, char *argv[])
+{
+	char *tty_dev = "/dev/ttyS0";
+	int opt;
+
+	const struct option options[] = {
+		{"tty", required_argument, 0, 't'},
+		{ }
+	};
+
+	struct aqua_ctx ctx = {
+		.probe_again.cb = probe_bus,
+	};
+
+	do {
+		opt = getopt_long(argc, argv, "", options, NULL);
+		switch (opt) {
+		case 't':
+			tty_dev = optarg;
+			break;
+		}
+	} while (opt > 0);
+
+	ulog_open(ULOG_STDIO | ULOG_SYSLOG, LOG_DAEMON, "aqua-control");
+	ulog_threshold(LOG_INFO);
+	ULOG_ERR("%s: Starting up\n", argv[0]);
+	uloop_init();
+
+	if (rs485_stream_open(tty_dev, &ctx.stream) < 0)
+		return -1;
+
+	uloop_timeout_set(&ctx.probe_again, 1000);
+	uloop_run();
+	uloop_done();
+}
