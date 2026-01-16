@@ -13,6 +13,7 @@ import signal
 
 #pylint: disable=import-error
 import serial_asyncio
+import serial.rs485
 from aquaproto import AqualinkProtocol
 
 JXI_RS485_DEV_ADDR = 0x68
@@ -295,6 +296,10 @@ async def main(args):
     socket_path = '/tmp/aquaheat.sock'
     loop = asyncio.get_event_loop()
 
+    rs485_settings = serial.rs485.RS485Settings(
+        rts_level_for_tx = True,
+        rts_level_for_rx = False)
+
     _, heater = await serial_asyncio.create_serial_connection(loop,
                                     Heater, args.tty, baudrate=9600)
 
@@ -309,6 +314,9 @@ async def main(args):
             print(f'Uh oh! {err}')
             return
 
+    if not args.disable_rts_on_send:
+        heater.transport.serial.rs485_mode = rs485_settings
+
     signal.signal(signal.SIGINT, heater.signal_shutdown)
 
     await asyncio.sleep(0.3)
@@ -321,6 +329,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='JXi heater control')
     parser.add_argument('--monitor-only',
                         help='Only monitor bus. Do not send packets.',
+                        action='store_true')
+    parser.add_argument('--disable-rts-on-send',
+                        help='Disable RS-485 setting RTS while transmitting.',
                         action='store_true')
     parser.add_argument('tty', type=str, help='path to serial port',
                         nargs='?', default='/dev/ttyUSB0')
