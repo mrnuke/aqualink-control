@@ -215,6 +215,20 @@ static void dev_clear_okay(struct uloop_timeout *t)
 	dev->data_valid = 0;
 }
 
+static void dump_sump(const char *msg, const uint8_t *buf, size_t len)
+{
+	size_t i;
+	char hex[256];
+	char *next = hex;
+	char *end = hex + sizeof(hex);
+
+	for (i = 0; i < len; i++) {
+		next += snprintf(next, end - next, " %02x", buf[i]);
+	}
+
+	ULOG_INFO("%s%s\n", msg, hex);
+}
+
 static int aqualink_handle_msg(struct aqua_ctx *ctx,
 			       const struct rs485_frame *request,
 			       const uint8_t *reply, size_t len)
@@ -305,6 +319,7 @@ static void rs485_notify_read(struct ustream *s, int bytes)
 	ret = aqualink_handle_frame(ctx, request, start, frame_len);
 	if (ret) {
 		ULOG_WARN("Unhandled frame (ret=%d)", ret);
+		dump_sump("Unknown frame", start, frame_len);
 	}
 
 	list_del(&request->list);
