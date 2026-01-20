@@ -22,8 +22,8 @@ JXI_CTL_SPA = 0x02
 JXI_CTL_CELSIUS = 0x04
 JXI_CTL_HEATER_ON = 0x08
 JXI_CTL_TEMP3_VALID = 0x10
-# Internal five-minute timeout. Not part of the protocol
-JXI_KEEPALIVE_TIMEOUT=300
+# Internal timeout (in seconds). Not part of the protocol
+JXI_KEEPALIVE_TIMEOUT=1800
 
 packet_def = {
     0x00 : { "name" : "probe", "fields" : [ ] },
@@ -237,11 +237,11 @@ class Heater(AqualinkProtocol):
             msg = None
 
             if verb == "spa":
-                self._ctl_byte |= JXI_CTL_POOL
                 self._ctl_byte &= ~JXI_CTL_POOL
+                self._ctl_byte |= JXI_CTL_SPA
             elif verb == "pool":
-                self._ctl_byte &= ~JXI_CTL_POOL
                 self._ctl_byte |= JXI_CTL_POOL
+                self._ctl_byte &= ~JXI_CTL_SPA
             elif verb == "on":
                 self._main_heater_turn_on()
                 msg = f"Staring heater. Timeout in {JXI_KEEPALIVE_TIMEOUT} sec."
