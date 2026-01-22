@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <sys/ioctl.h>
 
+#include <libubox/usock.h>
 #include <libubox/ustream.h>
 #include <libubox/ulog.h>
 #include <libubox/utils.h>
@@ -35,6 +36,7 @@ struct rs485_frame {
 
 struct aqua_ctx {
 	struct ustream_fd stream;
+	struct uloop_fd sock_fd;
 	struct uloop_timeout probe_again;
 	struct uloop_timeout device_work;
 	struct uloop_timeout interframe_gap;
@@ -397,6 +399,42 @@ static void probe_bus(struct uloop_timeout *t)
 
 	uloop_timeout_set(t, 2 * 1000);
 }
+#include <sys/socket.h>
+#include <sys/unistd.h>
+static void handle_socket(struct uloop_fd *u, unsigned int events)
+{
+	char *curr, *next, in_buf[200];
+	ssize_t len;
+	FILE *bile;
+	int cfd;
+
+	if (!(events & ULOOP_READ)) {
+		printf("eventesis %d\n", events);
+		return;
+	}
+
+	cfd = accept(u->fd, NULL, NULL);
+	bile = fdopen(cfd, "w");
+	len = recv(cfd, in_buf, sizeof(in_buf) - 1, 0);
+	if (len < 0) {
+		printf("Oh scheibe");
+	}
+	in_buf[len] = '\0';
+
+	curr = in_buf;
+	while (curr) {
+		next = memchr(in_buf, ' ', len);
+		if (next)
+			*next = '\0';
+
+		if (!strcmp(curr, "status")) {
+			fprintf(bile, "crapdraft\n");
+		}
+		curr = next;
+	};
+	fprintf(bile, "beep boop!\n");
+	fclose(bile);
+}
 
 static int handsome_dev(struct aqua_ctx *ctx, struct device *dev)
 {
@@ -486,6 +524,14 @@ int main(int argc, char *argv[])
 
 	if (rs485_stream_open(tty_dev, &ctx.stream) < 0)
 		return -1;
+
+	unlink("/tmp/aquaplay.sock");
+	ctx.sock_fd.fd = usock(USOCK_UNIX | USOCK_SERVER, "/tmp/aquaplay.sock", NULL);
+	if (!ctx.sock_fd.fd) {
+		ULOG_ERR("Scheibe!: %d\n", ctx.sock_fd.fd);
+	}
+	ctx.sock_fd.cb = handle_socket;
+	uloop_fd_add(&ctx.sock_fd, ULOOP_READ);
 
 	uloop_timeout_set(&ctx.probe_again, 1000);
 	uloop_timeout_set(&ctx.device_work, 1200);
