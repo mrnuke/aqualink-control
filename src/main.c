@@ -25,10 +25,20 @@ enum aqua_commands {
 	JXI_GET_MEASUREMENTS = 0x25,
 };
 
+struct rs485_frame {
+	struct list_head list;
+	uint8_t buf[32];
+	size_t len;
+};
+
 struct aqua_ctx {
 	struct ustream_fd stream;
 	struct uloop_timeout probe_again;
+	struct uloop_timeout rs485_timeout;
+	struct list_head pending_frames;
 };
+
+static int rs485_send_next_frame(struct aqua_ctx *ctx);
 
 static inline uint16_t read16_le(const uint8_t *raw)
 {
@@ -51,6 +61,71 @@ static void *memfind(const uint8_t *buf, size_t len, const uint8_t needle[2])
 	} while(start);
 
 	return start;
+}
+
+static void rs485_no_response(struct uloop_timeout *t)
+{
+	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, rs485_timeout);
+	struct rs485_frame *request;
+	uint8_t slave_addr;
+
+	request = list_first_entry(&ctx->pending_frames, struct rs485_frame,
+				   list);
+	slave_addr = request->buf[2];
+
+	ULOG_ERR("RS-485 timeout on request to device addr 0x%x\n", slave_addr);
+
+	/* Move on, as we no longer expect a response to this request. */
+	list_del(&request->list);
+	free(request);
+	rs485_send_next_frame(ctx);
+}
+
+static int rs485_send_frame(struct aqua_ctx *ctx, struct rs485_frame *frame)
+{
+	/* The timeout must include the time to transmit the request frame. */
+	ctx->rs485_timeout.cb = rs485_no_response;
+	uloop_timeout_set(&ctx->rs485_timeout, 200);
+
+	return ustream_write(&ctx->stream.stream, (void *)frame->buf,
+			     frame->len, false);
+}
+
+static int rs485_send_next_frame(struct aqua_ctx *ctx)
+{
+	struct rs485_frame *frame;
+
+	if (list_empty(&ctx->pending_frames))
+		return -EAGAIN;
+
+	frame = list_first_entry(&ctx->pending_frames, struct rs485_frame, list);
+	return rs485_send_frame(ctx, frame);
+}
+
+static int rs485_queue_frame(struct aqua_ctx *ctx, const uint8_t *buf,
+			     size_t len)
+{
+	bool queue_is_empty = list_empty(&ctx->pending_frames);
+	struct rs485_frame *frame;
+
+	if (len > sizeof(frame->buf)) {
+		ULOG_ERR("Requested frame size %zu too large\n", len);
+		return -E2BIG;
+	}
+
+	frame = malloc(sizeof(*frame));
+	if (!frame)
+		return -ENOMEM;
+
+	memset(frame, 0, sizeof(*frame));
+	memcpy(frame->buf, buf, len);
+	frame->len = len;
+
+	list_add_tail(&frame->list, &ctx->pending_frames);
+	if (queue_is_empty)
+		return rs485_send_frame(ctx, frame);
+
+	return 0;
 }
 
 static int aqualink_handle_measurements(struct aqua_ctx *ctx,
@@ -116,6 +191,7 @@ static void rs485_notify_read(struct ustream *s, int bytes)
 	struct aqua_ctx *ctx = container_of(ufd, struct aqua_ctx, stream);
 	const uint8_t header[] = { 0x10, 0x02 };
 	const uint8_t footer[] = { 0x10, 0x03 };
+	struct rs485_frame *request;
 	uint8_t *buf, *start, *end;
 	int ret, len, frame_len;
 
@@ -137,7 +213,15 @@ static void rs485_notify_read(struct ustream *s, int bytes)
 	if (ret) {
 		ULOG_WARN("Unhandled frame (ret=%d)", ret);
 	}
+
+	request = list_first_entry(&ctx->pending_frames, struct rs485_frame,
+				   list);
+	list_del(&request->list);
+
+	uloop_timeout_cancel(&ctx->rs485_timeout);
 	ustream_consume(s, end - buf + sizeof(footer));
+	rs485_send_next_frame(ctx);
+	free(request);
 }
 
 static void rs485_notify_state(struct ustream *s)
@@ -203,7 +287,7 @@ static void probe_bus(struct uloop_timeout *t)
 	uint8_t buf[32];
 
 	frame_len = aqualink_msg_to_frame(buf, probe, sizeof(probe));
-	ustream_write(&ctx->stream.stream, (void *)buf, frame_len, false);
+	rs485_queue_frame(ctx, buf, frame_len);
 
 	uloop_timeout_set(t, 2 * 1000);
 }
@@ -231,6 +315,7 @@ int main(int argc, char *argv[])
 		}
 	} while (opt > 0);
 
+	INIT_LIST_HEAD(&ctx.pending_frames);
 	ulog_open(ULOG_STDIO | ULOG_SYSLOG, LOG_DAEMON, "aqua-control");
 	ulog_threshold(LOG_INFO);
 	ULOG_ERR("%s: Starting up\n", argv[0]);
