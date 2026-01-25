@@ -76,7 +76,7 @@ packet_def = {
             ("cycles", 2),
             ("last_fault", 1),
             ("prev_fault", 1),
-            ("temp_raw", 1),
+            ("water_temp", 1, lambda t: t - 20),
         ]
     },
 }
@@ -92,7 +92,7 @@ def decode_packet(pkt, big_picture):
 
     offset = 2
     descr = ""
-    for name, size in pdef["fields"]:
+    for name, size, *xform in pdef["fields"]:
         if offset + size > len(pkt):
             break
 
@@ -113,6 +113,9 @@ def decode_packet(pkt, big_picture):
 
             if value:
                 print(f'[{dest:02x}] bitfield "{name}" has unknonwn bits set {value:02x}')
+
+        if xform:
+            value = xform[0](value)
 
         old_value = big_picture.get(name)
         if old_value and old_value != value:
