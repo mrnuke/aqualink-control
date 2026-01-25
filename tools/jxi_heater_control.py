@@ -81,6 +81,10 @@ packet_def = {
     },
 }
 
+def ffs(bitfield):
+    '''Find index of tghe the first set bit in a bitfield'''
+    return (bitfield & -bitfield).bit_length() - 1
+
 def decode_packet(pkt, big_picture):
     '''Decode a JXi packet'''
     dest = pkt[0]
@@ -108,7 +112,7 @@ def decode_packet(pkt, big_picture):
 
         if 'bitfields' in pdef and name in pdef["bitfields"]:
             for fieldname, mask in pdef["bitfields"][name]:
-                big_picture[fieldname] = value & mask
+                big_picture[fieldname] = (value & mask) >> ffs(mask)
                 value &= ~mask
 
             if value:
