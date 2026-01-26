@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <sys/ioctl.h>
 
+#include <libubox/kvlist.h>
 #include <libubox/usock.h>
 #include <libubox/ustream.h>
 #include <libubox/ulog.h>
@@ -205,6 +206,7 @@ static void dev_clear_okay(struct uloop_timeout *t)
 
 	ULOG_WARN("Communication lost with device addr=0x%x\n", dev->addr);
 	dev->connected = 0;
+	dev->data_valid = 0;
 }
 
 static void dump_sump(const char *msg, const uint8_t *buf, size_t len)
@@ -299,7 +301,7 @@ static void rs485_notify_read(struct ustream *s, int bytes)
 	frame_len = end - start + sizeof(footer);
 	ret = aqualink_handle_frame(ctx, start, frame_len);
 	if (ret) {
-		ULOG_WARN("Unhandled frame (ret=%d)", ret);
+		ULOG_WARN("Unhandled frame (ret=%d)\n", ret);
 		dump_sump("Unknown frame", start, frame_len);
 	}
 
@@ -375,6 +377,31 @@ static int rs485_stream_open(char *path, struct ustream_fd *s)
 	return 0;
 }
 
+static void properties_dump(struct aqua_ctx *ctx)
+{
+	struct property *datum;
+	struct kvlist props;
+	const char *name;
+
+	kvlist_for_each(&props, name, datum) {
+		switch (datum->type) {
+		case PROP_INT:
+			break;
+		case PROP_FLOAT:
+			break;
+		case PROP_BOOL:
+			break;
+		case PROP_STRING:
+			break;
+		default:
+			ULOG_INFO("Beep \"%s\" boop %d\n", name, datum->ival);
+			break;
+		}
+	}
+
+	exit(1);
+}
+
 static void probe_bus(struct uloop_timeout *t)
 {
 	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, probe_again);
@@ -383,6 +410,9 @@ static void probe_bus(struct uloop_timeout *t)
 	uint8_t buf[32];
 
 	uint8_t probe[] = {0, AQUA_PROBE_REQUEST};
+
+	if (0)
+		properties_dump(ctx);
 
 	for (i = 0; i < ARRAY_SIZE(ctx->slaves); i++) {
 		dev = ctx->slaves + i;

@@ -4,17 +4,42 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <libubox/uloop.h>
+#include <stdbool.h>
+#include <libubox/kvlist.h>
+
+struct aqua_ctx;
+
+struct property {
+	enum {
+		PROP_STRING,
+		PROP_FLOAT,
+		PROP_INT,
+		PROP_BOOL,
+	} type;
+
+	union {
+		const char *string;
+		float fval;
+		int ival;
+		bool bval;
+	};
+};
+
 
 struct device_ops;
 
 struct device {
 	struct uloop_timeout data_expired;
+	struct kvlist properties;
 	const struct device_ops *ops;
+	const char *name;
 	uint8_t addr;
+	int data_valid : 1;
 	int connected : 1;
 };
 
 struct device_ops {
+	int (*init_properties)(struct device *dev);
 	int (*handle_reply)(struct device *dev, const uint8_t *reply, size_t len);
 	int (*get_next_request)(struct device *dev, uint8_t* msg, size_t len);
 };
