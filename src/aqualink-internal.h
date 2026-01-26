@@ -4,17 +4,48 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <libubox/uloop.h>
+#include <stdbool.h>
+#include <libubox/kvlist.h>
+
+struct property {
+	enum {
+		PROP_STRING,
+		PROP_FLOAT,
+		PROP_INT,
+		PROP_BOOL,
+	} type;
+
+	union {
+		const char *string;
+		float fval;
+		int ival;
+		bool bval;
+	} datum;
+
+	struct list_head watchers;
+};
 
 struct device_ops;
 
 struct device {
 	struct uloop_timeout data_expired;
+	struct kvlist properties;
 	const struct device_ops *ops;
+	struct kvlist *context_props;
+	const char *name;
 	uint8_t addr;
+	int data_valid : 1;
 	int connected : 1;
 };
 
+struct prop_watcher {
+	struct list_head list;
+	void (*notify_change)(struct prop_watcher *pw, const char *name,
+			      const struct property *prop);
+};
+
 struct device_ops {
+	int (*init_properties)(struct device *dev);
 	int (*handle_reply)(struct device *dev, const uint8_t *reply, size_t len);
 	int (*get_next_request)(struct device *dev, uint8_t* msg, size_t len);
 };
@@ -25,6 +56,23 @@ size_t aqualink_pack(uint8_t *dest, const uint8_t *buf, size_t len);
 
 size_t aqualink_msg_to_frame(uint8_t *dest, const uint8_t *msg, size_t len);
 int aqualink_frame_to_msg(uint8_t *dest, const uint8_t *frame, size_t len);
+
+/* Named properties.
+ * "prop_" are context-global properties, "dev-" are device-specific.
+ * Context propertied can be watched for changes using a prop_watcher.
+ */
+int prop_add_watcher(struct device *dev, const char *name,
+		     struct prop_watcher *pw);
+void prop_del_watcher(struct prop_watcher *pw);
+
+int dev_get_int(struct device *dev, const char *name);
+int prop_get_int(struct device *dev, const char *name);
+
+int dev_set_int(struct device *dev, const char *name, int val);
+int prop_set_int(struct device *dev, const char *name, int val);
+
+const char *prop_get_string(struct device *dev, const char *name);
+int prop_set_string(struct device *dev, const char *name, const char *string);
 
 extern const struct device_ops jxi_heater_ops;
 

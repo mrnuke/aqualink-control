@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <sys/ioctl.h>
 
+#include <libubox/kvlist.h>
 #include <libubox/ustream.h>
 #include <libubox/ulog.h>
 #include <libubox/utils.h>
@@ -33,6 +34,11 @@ struct rs485_frame {
 	size_t len;
 };
 
+int get_len(struct kvlist *kv, const void *data)
+{
+	return sizeof(struct property);
+}
+
 struct aqua_ctx {
 	struct ustream_fd stream;
 	struct uloop_timeout probe_again;
@@ -40,6 +46,7 @@ struct aqua_ctx {
 	struct uloop_timeout interframe_gap;
 	struct uloop_timeout rs485_timeout;
 	struct list_head pending_frames;
+	struct kvlist properties;
 	struct device slaves[10];
 };
 
@@ -98,6 +105,12 @@ static int add_slave(struct aqua_ctx *ctx, uint8_t addr,
 	dev = ctx->slaves + i;
 	dev->addr = addr;
 	dev->ops = ops;
+	dev->context_props = &ctx->properties;
+
+	kvlist_init(&dev->properties, get_len);
+
+	if (dev->ops->init_properties)
+		dev->ops->init_properties(dev);
 
 	return 0;
 }
@@ -199,6 +212,7 @@ static void dev_clear_okay(struct uloop_timeout *t)
 
 	ULOG_WARN("Communication lost with device addr=0x%x\n", dev->addr);
 	dev->connected = 0;
+	dev->data_valid = 0;
 }
 
 static int aqualink_handle_msg(struct aqua_ctx *ctx,
@@ -358,6 +372,29 @@ static int rs485_stream_open(char *path, struct ustream_fd *s)
 	return 0;
 }
 
+static void properties_dump(struct aqua_ctx *ctx)
+{
+	struct property *prop;
+	const char *name;
+
+	kvlist_for_each(&ctx->properties, name, prop) {
+		switch (prop->type) {
+		case PROP_INT:
+			ULOG_INFO("\t\"%s\" : %d\n", name, prop->datum.ival);
+			break;
+		case PROP_FLOAT:
+			break;
+		case PROP_BOOL:
+			break;
+		case PROP_STRING:
+			break;
+		default:
+			ULOG_INFO("Beep \"%s\" boop %d\n", name, prop->datum.ival);
+			break;
+		}
+	}
+}
+
 static void probe_bus(struct uloop_timeout *t)
 {
 	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, probe_again);
@@ -366,6 +403,9 @@ static void probe_bus(struct uloop_timeout *t)
 	uint8_t buf[32];
 
 	uint8_t probe[] = {0, AQUA_PROBE_REQUEST};
+
+	if (0)
+		properties_dump(ctx);
 
 	for (i = 0; i < ARRAY_SIZE(ctx->slaves); i++) {
 		dev = ctx->slaves + i;
@@ -432,6 +472,22 @@ static void handle_connected_devices(struct uloop_timeout *t)
 	uloop_timeout_set(t, 500);
 }
 
+static void hackus_proppus(struct aqua_ctx *ctx)
+{
+	struct property prop_uno = {0} ;
+	struct property *prop;
+	const char *name;
+
+	prop_uno.type = PROP_INT;
+	kvlist_set(&ctx->properties, "pool_setpoint", &prop_uno);
+	kvlist_set(&ctx->properties, "water_temp", &prop_uno);
+
+	/* kvlist_set creates a new copy, so we need to re-init the lists. */
+	kvlist_for_each(&ctx->properties, name, prop) {
+		INIT_LIST_HEAD(&prop->watchers);
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	char *tty_dev = "/dev/ttyS0";
@@ -445,7 +501,9 @@ int main(int argc, char *argv[])
 	struct aqua_ctx ctx = {
 		.probe_again.cb = probe_bus,
 		.device_work.cb = handle_connected_devices,
+		.properties = KVLIST_INIT(ctx.properties, get_len),
 	};
+	hackus_proppus(&ctx);
 
 	do {
 		opt = getopt_long(argc, argv, "", options, NULL);
