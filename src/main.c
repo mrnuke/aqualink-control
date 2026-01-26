@@ -20,9 +20,11 @@
 
 #include <libubox/ustream.h>
 #include <libubox/ulog.h>
+#include <libubox/utils.h>
 
 enum aqua_commands {
-	JXI_GET_MEASUREMENTS = 0x25,
+	AQUA_PROBE_REQUEST = 0x00,
+	AQUA_PROBE_RESPONSE = 0x01,
 };
 
 struct rs485_frame {
@@ -37,9 +39,67 @@ struct aqua_ctx {
 	struct uloop_timeout interframe_gap;
 	struct uloop_timeout rs485_timeout;
 	struct list_head pending_frames;
+	struct device slaves[10];
 };
 
 static int rs485_send_next_frame(struct aqua_ctx *ctx);
+
+static int compare_dev_addr(const void *a, const void *b)
+{
+	const struct device *first = a;
+	const struct device *second = b;
+
+	if (!second->addr)
+		return -1;
+
+	return first->addr - second->addr;
+}
+
+static struct device *lookup_slave(struct aqua_ctx *ctx, uint8_t dev_addr)
+{
+	const struct device key = {
+		.addr = dev_addr,
+	};
+
+	return bsearch(&key, ctx->slaves, ARRAY_SIZE(ctx->slaves),
+			 sizeof(ctx->slaves[0]), compare_dev_addr);
+}
+
+static int add_slave(struct aqua_ctx *ctx, uint8_t addr,
+		     const struct device_ops *ops)
+{
+	struct device *dev = lookup_slave(ctx, addr);
+	int i, last;
+
+	if (dev)
+		return -EEXIST;
+
+	for (i = 0; i < ARRAY_SIZE(ctx->slaves); i++) {
+		if (ctx->slaves[i].addr == 0)
+			break;
+
+		if (ctx->slaves[i].addr > addr)
+			break;
+	}
+
+	for (last = 0; last < ARRAY_SIZE(ctx->slaves); last++) {
+		if (ctx->slaves[last].addr == 0)
+			break;
+	}
+
+	if (i >= ARRAY_SIZE(ctx->slaves) || last >= ARRAY_SIZE(ctx->slaves))
+		return -ENOMEM;
+
+	if (last > i)
+		memmove(ctx->slaves + i + 1, ctx->slaves + i,
+			(last - i) * sizeof(ctx->slaves[0]));
+
+	dev = ctx->slaves + i;
+	dev->addr = addr;
+	dev->ops = ops;
+
+	return 0;
+}
 
 static void *memfind(const uint8_t *buf, size_t len, const uint8_t needle[2])
 {
@@ -136,22 +196,30 @@ static int rs485_queue_frame(struct aqua_ctx *ctx, const uint8_t *buf,
 	return 0;
 }
 
-static int aqualink_handle_msg(struct aqua_ctx *ctx, const uint8_t *msg,
-			       size_t len)
+static int aqualink_handle_msg(struct aqua_ctx *ctx,
+			       const struct rs485_frame *request,
+			       const uint8_t *reply, size_t len)
 {
-	uint8_t cmd;
-	int ret;
+	struct device *slave;
+	uint8_t cmd, dev_addr;
+	int ret = 0;
 
 	if (len < 2)
 		return -ENODATA;
 
-	cmd = msg[1];
+	dev_addr = request->buf[2];
+
+	slave = lookup_slave(ctx, dev_addr);
+	if (!slave)
+		return -ENODEV;
+
+	cmd = reply[1];
 	switch (cmd) {
-	case JXI_GET_MEASUREMENTS:
-		ret = jxi_heater_ops.handle_reply(NULL, msg, len);
+	case AQUA_PROBE_RESPONSE:
+		slave->connected = 1;
 		break;
 	default:
-		ret = -EBADRQC;
+		ret = slave->ops->handle_reply(slave, reply, len);
 		break;
 	}
 
@@ -161,6 +229,7 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx, const uint8_t *msg,
 static int aqualink_handle_frame(struct aqua_ctx *ctx, uint8_t *frame,
 				 size_t len)
 {
+	struct rs485_frame *request;
 	uint8_t buf[32];
 	int msg_len;
 
@@ -170,7 +239,10 @@ static int aqualink_handle_frame(struct aqua_ctx *ctx, uint8_t *frame,
 		return msg_len;
 	}
 
-	return aqualink_handle_msg(ctx, buf, msg_len);
+	request = list_first_entry(&ctx->pending_frames, struct rs485_frame,
+				   list);
+
+	return aqualink_handle_msg(ctx, request, buf, msg_len);
 }
 
 
@@ -201,6 +273,11 @@ static void rs485_notify_read(struct ustream *s, int bytes)
 	ret = aqualink_handle_frame(ctx, start, frame_len);
 	if (ret) {
 		ULOG_WARN("Unhandled frame (ret=%d)", ret);
+	}
+
+	if (list_empty(&ctx->pending_frames)) {
+		ULOG_ERR("Discarding unsolicited reply!\n");
+		return;
 	}
 
 	request = list_first_entry(&ctx->pending_frames, struct rs485_frame,
@@ -273,12 +350,24 @@ static int rs485_stream_open(char *path, struct ustream_fd *s)
 static void probe_bus(struct uloop_timeout *t)
 {
 	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, probe_again);
-	const uint8_t probe[] = {0x68, JXI_GET_MEASUREMENTS};
-	size_t frame_len;
+	struct device *dev;
+	size_t i, frame_len;
 	uint8_t buf[32];
 
-	frame_len = aqualink_msg_to_frame(buf, probe, sizeof(probe));
-	rs485_queue_frame(ctx, buf, frame_len);
+	uint8_t probe[] = {0, AQUA_PROBE_REQUEST};
+
+	for (i = 0; i < ARRAY_SIZE(ctx->slaves); i++) {
+		dev = ctx->slaves + i;
+		if (dev->connected)
+			continue;
+
+		if (dev->addr == 0)
+			break;
+
+		probe[0] = dev->addr;
+		frame_len = aqualink_msg_to_frame(buf, probe, sizeof(probe));
+		rs485_queue_frame(ctx, buf, frame_len);
+	}
 
 	uloop_timeout_set(t, 2 * 1000);
 }
@@ -286,7 +375,7 @@ static void probe_bus(struct uloop_timeout *t)
 int main(int argc, char *argv[])
 {
 	char *tty_dev = "/dev/ttyS0";
-	int opt;
+	int opt, ret;
 
 	const struct option options[] = {
 		{"tty", required_argument, 0, 't'},
@@ -307,6 +396,13 @@ int main(int argc, char *argv[])
 	} while (opt > 0);
 
 	INIT_LIST_HEAD(&ctx.pending_frames);
+
+	ret = add_slave(&ctx, 0x68, &jxi_heater_ops);
+	if (ret) {
+		ULOG_ERR("Internal error: %d\n", ret);
+		return EXIT_FAILURE;
+	}
+
 	ulog_open(ULOG_STDIO | ULOG_SYSLOG, LOG_DAEMON, "aqua-control");
 	ulog_threshold(LOG_INFO);
 	ULOG_ERR("%s: Starting up\n", argv[0]);

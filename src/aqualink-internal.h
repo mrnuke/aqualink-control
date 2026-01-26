@@ -8,6 +8,8 @@ struct device_ops;
 
 struct device {
 	const struct device_ops *ops;
+	uint8_t addr;
+	int connected : 1;
 };
 
 struct device_ops {
