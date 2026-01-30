@@ -34,6 +34,7 @@ struct rs485_frame {
 struct aqua_ctx {
 	struct ustream_fd stream;
 	struct uloop_timeout probe_again;
+	struct uloop_timeout interframe_gap;
 	struct uloop_timeout rs485_timeout;
 	struct list_head pending_frames;
 };
@@ -81,8 +82,20 @@ static void rs485_no_response(struct uloop_timeout *t)
 	rs485_send_next_frame(ctx);
 }
 
+static void rs485_send_after_interframe_gap(struct uloop_timeout *t)
+{
+	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, interframe_gap);
+
+	rs485_send_next_frame(ctx);
+}
+
 static int rs485_send_frame(struct aqua_ctx *ctx, struct rs485_frame *frame)
 {
+	if (ctx->interframe_gap.pending) {
+		ctx->interframe_gap.cb = rs485_send_after_interframe_gap;
+		return -EAGAIN;
+	}
+
 	/* The timeout must include the time to transmit the request frame. */
 	ctx->rs485_timeout.cb = rs485_no_response;
 	uloop_timeout_set(&ctx->rs485_timeout, 200);
@@ -219,6 +232,8 @@ static void rs485_notify_read(struct ustream *s, int bytes)
 	list_del(&request->list);
 
 	uloop_timeout_cancel(&ctx->rs485_timeout);
+	/* 3.5 characters at 9600 baud is about 3.6 milliseconds. Round up. */
+	uloop_timeout_set(&ctx->interframe_gap, 4);
 	ustream_consume(s, end - buf + sizeof(footer));
 	rs485_send_next_frame(ctx);
 	free(request);
