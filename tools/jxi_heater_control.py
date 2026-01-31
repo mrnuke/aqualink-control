@@ -131,7 +131,9 @@ def decode_packet(pkt, big_picture):
 class Heater(AqualinkProtocol):
     '''Extension of Aqualink protocol for JXi heaters'''
     def __init__(self):
-        self._status = {}
+        self._status = {
+            "timeout" : 0
+        }
         self._ctl_byte = JXI_CTL_CELSIUS
         self.setpoint = {
             "pool" : 20,
@@ -219,6 +221,7 @@ class Heater(AqualinkProtocol):
         else:
             # Defer turning off heater
             loop.call_at(self._heater_off_time, self._heater_keepalive_timeout)
+            self._status["timeout"] = 0
 
 
     def _main_heater_turn_on(self):
@@ -270,6 +273,10 @@ class Heater(AqualinkProtocol):
             'status' : self._format_status,
             'help' : lambda _ : 'commands: ' + ' '.join(sock_cmds.keys())
         }
+
+        loop = asyncio.get_running_loop()
+        if self._heater_off_time and self._heater_off_time >= loop.time():
+            self._status["timeout"] = int(self._heater_off_time - loop.time())
 
         while True:
             line = await reader.readline()
