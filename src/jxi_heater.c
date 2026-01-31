@@ -1,0 +1,79 @@
+#include "aqualink-internal.h"
+
+#include <errno.h>
+#include <libubox/ulog.h>
+#include <libubox/utils.h>
+
+enum jxi_commands {
+	JXI_COMMAND = 0x0c,
+	JXI_COMMAND_REPLY = 0x0d,
+	JXI_GET_MEASUREMENTS = 0x25,
+};
+
+static int jxi_handle_control_response(struct device *dev,
+				       const uint8_t *msg, size_t len)
+{
+	uint8_t status, huh, errors;
+
+	if (len < 5)
+		return -ENODATA;
+
+	status = msg[2];
+	huh = msg[3];
+	errors = msg[4];
+
+	ULOG_INFO("sflags=%x, unknown=%x, eflags=%x\n", status, huh, errors);
+
+	if (status & 0x08)
+		ULOG_INFO("Heater is on or in the process of igniting");
+	if (status & 0x10)
+		ULOG_INFO("Remote RS-485 is disabled at the panel");
+	if (errors & 0x08)
+		ULOG_ERR("heater no burno\n");
+
+	return 0;
+}
+
+static int jxi_handle_measurements(struct device *dev,
+				   const uint8_t *msg, size_t len)
+{
+	uint16_t gv_on_time, cycles;
+	int temperature;
+
+	if (len < 9)
+		return -ENODATA;
+
+	gv_on_time = read16_le(msg + 2);
+	cycles = read16_le(msg + 4);
+	temperature = (int)msg[8] - 20;
+
+	ULOG_INFO("%d cycles, %d hours, temperature = %d\n", cycles, gv_on_time,
+		  temperature);
+
+	return 0;
+}
+
+static int jxi_handle_reply(struct device *dev, const uint8_t *reply,
+			    size_t len)
+{
+	uint8_t cmd = reply[1];
+	int ret;
+
+	switch (cmd) {
+		case JXI_COMMAND_REPLY:
+			ret = jxi_handle_control_response(dev, reply, len);
+			break;
+		case JXI_GET_MEASUREMENTS:
+			ret = jxi_handle_measurements(dev, reply, len);
+			break;
+		default:
+			ret = -EBADRQC;
+			break;
+	}
+
+	return ret;
+}
+
+const struct device_ops jxi_heater_ops = {
+	.handle_reply = jxi_handle_reply,
+};

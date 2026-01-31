@@ -41,11 +41,6 @@ struct aqua_ctx {
 
 static int rs485_send_next_frame(struct aqua_ctx *ctx);
 
-static inline uint16_t read16_le(const uint8_t *raw)
-{
-	return (uint16_t)raw[1] << 8 | raw[0];
-}
-
 static void *memfind(const uint8_t *buf, size_t len, const uint8_t needle[2])
 {
 	const uint8_t *next;
@@ -141,25 +136,6 @@ static int rs485_queue_frame(struct aqua_ctx *ctx, const uint8_t *buf,
 	return 0;
 }
 
-static int aqualink_handle_measurements(struct aqua_ctx *ctx,
-					const uint8_t *msg, size_t len)
-{
-	uint16_t gv_on_time, cycles;
-	int temperature;
-
-	if (len < 9)
-		return -ENODATA;
-
-	gv_on_time = read16_le(msg + 2);
-	cycles = read16_le(msg + 4);
-	temperature = (int)msg[8] - 20;
-
-	ULOG_INFO("%d cycles, %d hours, temperature = %d\n", cycles, gv_on_time,
-		 temperature);
-
-	return 0;
-}
-
 static int aqualink_handle_msg(struct aqua_ctx *ctx, const uint8_t *msg,
 			       size_t len)
 {
@@ -172,7 +148,7 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx, const uint8_t *msg,
 	cmd = msg[1];
 	switch (cmd) {
 	case JXI_GET_MEASUREMENTS:
-		ret = aqualink_handle_measurements(ctx, msg, len);
+		ret = jxi_heater_ops.handle_reply(NULL, msg, len);
 		break;
 	default:
 		ret = -EBADRQC;

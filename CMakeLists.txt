@@ -17,7 +17,11 @@ else()
 endif()
 
 
-add_executable(aquamasterd src/main.c src/aqualink_frame.c)
+add_executable(aquamasterd
+	src/aqualink_frame.c
+	src/main.c
+	src/jxi_heater.c
+)
 target_link_libraries(aquamasterd ubox-static)
 
 # Current tests are small, so they can be left enabled.
