@@ -74,6 +74,15 @@ static int jxi_handle_reply(struct device *dev, const uint8_t *reply,
 	return ret;
 }
 
+static int jxi_get_next_request(struct device *dev, uint8_t* msg, size_t len)
+{
+	msg[0] = 0x68;
+	msg[1] = JXI_GET_MEASUREMENTS;
+
+	return 2;
+}
+
 const struct device_ops jxi_heater_ops = {
 	.handle_reply = jxi_handle_reply,
+	.get_next_request = jxi_get_next_request,
 };

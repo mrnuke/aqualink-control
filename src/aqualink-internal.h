@@ -3,10 +3,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <libubox/uloop.h>
 
 struct device_ops;
 
 struct device {
+	struct uloop_timeout data_expired;
 	const struct device_ops *ops;
 	uint8_t addr;
 	int connected : 1;
@@ -14,6 +16,7 @@ struct device {
 
 struct device_ops {
 	int (*handle_reply)(struct device *dev, const uint8_t *reply, size_t len);
+	int (*get_next_request)(struct device *dev, uint8_t* msg, size_t len);
 };
 
 /* Unescape [10 00] to just [10] */
