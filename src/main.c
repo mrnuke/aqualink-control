@@ -36,6 +36,7 @@ struct rs485_frame {
 struct aqua_ctx {
 	struct ustream_fd stream;
 	struct uloop_timeout probe_again;
+	struct uloop_timeout device_work;
 	struct uloop_timeout interframe_gap;
 	struct uloop_timeout rs485_timeout;
 	struct list_head pending_frames;
@@ -196,6 +197,14 @@ static int rs485_queue_frame(struct aqua_ctx *ctx, const uint8_t *buf,
 	return 0;
 }
 
+static void dev_clear_okay(struct uloop_timeout *t)
+{
+	struct device *dev = container_of(t, struct device, data_expired);
+
+	ULOG_WARN("Communication lost with device addr=0x%x\n", dev->addr);
+	dev->connected = 0;
+}
+
 static int aqualink_handle_msg(struct aqua_ctx *ctx,
 			       const struct rs485_frame *request,
 			       const uint8_t *reply, size_t len)
@@ -217,11 +226,14 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 	switch (cmd) {
 	case AQUA_PROBE_RESPONSE:
 		slave->connected = 1;
+		slave->data_expired.cb = dev_clear_okay;
 		break;
 	default:
 		ret = slave->ops->handle_reply(slave, reply, len);
 		break;
 	}
+
+	uloop_timeout_set(&slave->data_expired, 2 * 1000);
 
 	return ret;
 }
@@ -372,6 +384,55 @@ static void probe_bus(struct uloop_timeout *t)
 	uloop_timeout_set(t, 2 * 1000);
 }
 
+static int handsome_dev(struct aqua_ctx *ctx, struct device *dev)
+{
+	uint8_t msg_buf[16], buf[32];
+	int len, frame_len;
+
+	if (!dev->ops->get_next_request)
+		return -EOPNOTSUPP;
+
+	len = dev->ops->get_next_request(dev, msg_buf, sizeof(msg_buf));
+	if (len < 0)
+		return len;
+
+	msg_buf[0] = dev->addr;
+	frame_len = aqualink_msg_to_frame(buf, msg_buf, len);
+	return rs485_queue_frame(ctx, buf, frame_len);
+}
+
+static void handle_connected_devices(struct uloop_timeout *t)
+{
+	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, device_work);
+	struct device *dev;
+	int i, ret;
+
+	if (!list_empty(&ctx->pending_frames)) {
+		ULOG_WARN("Bus contention. Delaying device work\n");
+		uloop_timeout_set(t, 100);
+		return;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(ctx->slaves); i++) {
+		dev = ctx->slaves + i;
+
+		if (dev->addr == 0)
+			break;
+
+		if (!dev->ops->get_next_request)
+			continue;
+
+		ret = handsome_dev(ctx, dev);
+		if (ret < 0) {
+			ULOG_ERR("Slave addr=0x%x next request error %d\n",
+				 dev->addr, ret);
+			continue;
+		}
+	}
+
+	uloop_timeout_set(t, 500);
+}
+
 int main(int argc, char *argv[])
 {
 	char *tty_dev = "/dev/ttyS0";
@@ -384,6 +445,7 @@ int main(int argc, char *argv[])
 
 	struct aqua_ctx ctx = {
 		.probe_again.cb = probe_bus,
+		.device_work.cb = handle_connected_devices,
 	};
 
 	do {
@@ -412,6 +474,7 @@ int main(int argc, char *argv[])
 		return -1;
 
 	uloop_timeout_set(&ctx.probe_again, 1000);
+	uloop_timeout_set(&ctx.device_work, 1200);
 	uloop_run();
 	uloop_done();
 }
