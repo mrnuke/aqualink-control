@@ -20,6 +20,7 @@ endif()
 add_executable(aquamasterd
 	src/aqualink_frame.c
 	src/main.c
+	src/rs_panel.c
 	src/jxi_heater.c
 )
 target_link_libraries(aquamasterd ubox-static)

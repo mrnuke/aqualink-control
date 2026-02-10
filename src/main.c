@@ -53,7 +53,7 @@ static int compare_dev_addr(const void *a, const void *b)
 	const struct device *first = a;
 	const struct device *second = b;
 
-	if (!second->addr)
+	if (second->addr == 0)
 		return -1;
 
 	return first->addr - second->addr;
@@ -220,7 +220,7 @@ static void dump_sump(const char *msg, const uint8_t *buf, size_t len)
 		next += snprintf(next, end - next, " %02x", buf[i]);
 	}
 
-	ULOG_INFO("%s%s\n", hex, msg);
+	ULOG_INFO("%s%s\n", msg, hex);
 }
 
 static int aqualink_handle_msg(struct aqua_ctx *ctx,
@@ -245,7 +245,9 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 	case AQUA_PROBE_RESPONSE:
 		slave->connected = 1;
 		slave->data_expired.cb = dev_clear_okay;
-		break;
+		if (len == 2)
+			break;
+		/* fall through */
 	default:
 		ret = slave->ops->handle_reply(slave, reply, len);
 		break;
@@ -501,7 +503,7 @@ static void handle_connected_devices(struct uloop_timeout *t)
 		if (dev->addr == 0)
 			break;
 
-		if (!dev->ops->get_next_request)
+		if (!dev->connected || !dev->ops->get_next_request)
 			continue;
 
 		ret = handsome_dev(ctx, dev);
@@ -541,6 +543,7 @@ int main(int argc, char *argv[])
 
 	INIT_LIST_HEAD(&ctx.pending_frames);
 
+	ret = add_slave(&ctx, 0x0a, &rs_panel_ops);
 	ret = add_slave(&ctx, 0x68, &jxi_heater_ops);
 	if (ret) {
 		ULOG_ERR("Internal error: %d\n", ret);

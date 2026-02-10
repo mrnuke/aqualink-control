@@ -52,6 +52,7 @@ size_t aqualink_msg_to_frame(uint8_t *dest, const uint8_t *msg, size_t len);
 int aqualink_frame_to_msg(uint8_t *dest, const uint8_t *frame, size_t len);
 
 extern const struct device_ops jxi_heater_ops;
+extern const struct device_ops rs_panel_ops;
 
 static inline uint16_t read16_le(const uint8_t *raw)
 {
