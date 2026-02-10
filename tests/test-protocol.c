@@ -57,6 +57,8 @@ static int test_framer(void)
 	const uint8_t message1[] = {0x68, 0x10, 0xbe, 0x10};
 	const uint8_t frame2[] = {0x10, 0x02, 0x00, 0x25, 0x15, 0x00, 0x56, 0x01, 0xf5, 0x00, 0x23, 0xbb, 0x10, 0x03};
 	const uint8_t message2[] = {0x00, 0x25, 0x15, 0x00, 0x56, 0x01, 0xf5, 0x00, 0x23};
+	const uint8_t csum_10_msg[] = {0xFE};
+	const uint8_t csum_10_frame[] = {0x10, 0x02, 0xFE, 0x10, 0x00, 0x10, 0x03};
 
 	uint8_t buf[sizeof(frame2)];
 	int ret;
@@ -68,6 +70,11 @@ static int test_framer(void)
 
 	ret = test_frame_encoding(frame2, sizeof(frame2),
 				  message2, sizeof(message2), buf);
+	if (ret)
+		return ret;
+
+	ret = test_frame_encoding(csum_10_frame, sizeof(csum_10_frame),
+				  csum_10_msg, sizeof(csum_10_msg), buf);
 	if (ret)
 		return ret;
 

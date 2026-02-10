@@ -35,7 +35,7 @@ size_t aqualink_msg_to_frame(uint8_t *dest, const uint8_t *msg, size_t len)
 	sum = mod256_sum(dest_start, dest - dest_start);
 	*dest++ = sum;
 	if (sum == 0x10)
-		*dest++ = 0x10;
+		*dest++ = 0x00;
 
 	*dest++ = 0x10;
 	*dest++ = 0x03;
