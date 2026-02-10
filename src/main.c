@@ -240,7 +240,9 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 				  dev_addr);
 		slave->connected = 1;
 		slave->data_expired.cb = dev_clear_okay;
-		break;
+		if (len == 2)
+			break;
+		/* fall through */
 	default:
 		ret = slave->ops->handle_reply(slave, reply, len);
 		break;
