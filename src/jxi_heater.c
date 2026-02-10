@@ -34,6 +34,13 @@ static int jxi_handle_control_response(struct device *dev,
 	return 0;
 }
 
+/*
+ * Cousin AI suggested:
+ * // Inside jxi_heater_handle_measurements
+ * prop_set_int(dev, "gv_hours", gv_on_time);
+ * prop_set_int(dev, "ignition_cycles", cycles);
+ * prop_set_int(dev, "water_temp", temperature);
+ */
 static int jxi_handle_measurements(struct device *dev,
 				   const uint8_t *msg, size_t len)
 {
@@ -74,6 +81,19 @@ static int jxi_handle_reply(struct device *dev, const uint8_t *reply,
 	return ret;
 }
 
+/*
+ * Cousin AI:
+ * // Inside jxi_heater_get_next_request
+ * uint8_t flags = 0x08; // Always "Enable Heater" if we are in this state
+ * if (prop_get_bool(dev, "pool_enabled")) flags |= 0x01;
+ * if (prop_get_bool(dev, "spa_enabled"))  flags |= 0x02;
+ *
+ * buf[0] = 0x0c;
+ * buf[1] = flags;
+ * buf[2] = (uint8_t)prop_get_int(dev, "pool_setpoint");
+ * buf[3] = (uint8_t)prop_get_int(dev, "spa_setpoint");
+ * buf[4] = 0xff; // The "Aquadick" External Temp Null
+ */
 static int jxi_get_next_request(struct device *dev, uint8_t* msg, size_t len)
 {
 	msg[0] = 0x68;
