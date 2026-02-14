@@ -35,6 +35,11 @@ struct rs485_frame {
 	size_t len;
 };
 
+int get_len(struct kvlist *kv, const void *data)
+{
+	return sizeof(struct property);
+}
+
 struct aqua_ctx {
 	struct ustream_fd stream;
 	struct uloop_fd sock_fd;
@@ -43,6 +48,7 @@ struct aqua_ctx {
 	struct uloop_timeout interframe_gap;
 	struct uloop_timeout rs485_timeout;
 	struct list_head pending_frames;
+	struct kvlist properties;
 	struct device slaves[10];
 };
 
@@ -101,6 +107,12 @@ static int add_slave(struct aqua_ctx *ctx, uint8_t addr,
 	dev = ctx->slaves + i;
 	dev->addr = addr;
 	dev->ops = ops;
+	dev->context_props = &ctx->properties;
+
+	kvlist_init(&dev->properties, get_len);
+
+	if (dev->ops->init_properties)
+		dev->ops->init_properties(dev);
 
 	return 0;
 }
@@ -431,42 +443,6 @@ static void probe_bus(struct uloop_timeout *t)
 
 	uloop_timeout_set(t, 2 * 1000);
 }
-#include <sys/socket.h>
-#include <sys/unistd.h>
-static void handle_socket(struct uloop_fd *u, unsigned int events)
-{
-	char *curr, *next, in_buf[200];
-	ssize_t len;
-	FILE *bile;
-	int cfd;
-
-	if (!(events & ULOOP_READ)) {
-		printf("eventesis %d\n", events);
-		return;
-	}
-
-	cfd = accept(u->fd, NULL, NULL);
-	bile = fdopen(cfd, "w");
-	len = recv(cfd, in_buf, sizeof(in_buf) - 1, 0);
-	if (len < 0) {
-		printf("Oh scheibe");
-	}
-	in_buf[len] = '\0';
-
-	curr = in_buf;
-	while (curr) {
-		next = memchr(in_buf, ' ', len);
-		if (next)
-			*next = '\0';
-
-		if (!strcmp(curr, "status")) {
-			fprintf(bile, "crapdraft\n");
-		}
-		curr = next;
-	};
-	fprintf(bile, "beep boop!\n");
-	fclose(bile);
-}
 
 static int handsome_dev(struct aqua_ctx *ctx, struct device *dev)
 {
@@ -517,6 +493,52 @@ static void handle_connected_devices(struct uloop_timeout *t)
 	uloop_timeout_set(t, 500);
 }
 
+#include <sys/socket.h>
+#include <sys/unistd.h>
+static void handle_socket(struct uloop_fd *u, unsigned int events)
+{
+	char *curr, *next, in_buf[200];
+	ssize_t len;
+	FILE *bile;
+	int cfd;
+
+	if (!(events & ULOOP_READ)) {
+		printf("eventesis %d\n", events);
+		return;
+	}
+
+	cfd = accept(u->fd, NULL, NULL);
+	bile = fdopen(cfd, "w");
+	len = recv(cfd, in_buf, sizeof(in_buf) - 1, 0);
+	if (len < 0) {
+		printf("Oh scheibe");
+	}
+	in_buf[len] = '\0';
+
+	curr = in_buf;
+	while (curr) {
+		next = memchr(in_buf, ' ', len);
+		if (next)
+			*next = '\0';
+
+		if (!strcmp(curr, "status")) {
+			fprintf(bile, "crapdraft\n");
+		}
+		curr = next;
+	};
+	fprintf(bile, "beep boop!\n");
+	fclose(bile);
+}
+
+static void hackus_proppus(struct aqua_ctx *ctx)
+{
+	struct property prop_uno = {0} ;
+
+	prop_uno.type = PROP_INT;
+	kvlist_set(&ctx->properties, "pool_setpoint", &prop_uno);
+	kvlist_set(&ctx->properties, "water_temp", &prop_uno);
+}
+
 int main(int argc, char *argv[])
 {
 	char *tty_dev = "/dev/ttyS0";
@@ -530,7 +552,9 @@ int main(int argc, char *argv[])
 	struct aqua_ctx ctx = {
 		.probe_again.cb = probe_bus,
 		.device_work.cb = handle_connected_devices,
+		.properties = KVLIST_INIT(ctx.properties, get_len),
 	};
+	hackus_proppus(&ctx);
 
 	do {
 		opt = getopt_long(argc, argv, "", options, NULL);

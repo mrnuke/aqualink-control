@@ -54,11 +54,14 @@ static int jxi_handle_measurements(struct device *dev,
 	cycles = read16_le(msg + 4);
 	temperature = (int)msg[8] - 20;
 
+	prop_set_int(dev, "water_temp", temperature);
+
 	ULOG_INFO("%d cycles, %d hours, temperature = %d\n", cycles, gv_on_time,
 		  temperature);
 
 	return 0;
 }
+
 
 static int jxi_handle_reply(struct device *dev, const uint8_t *reply,
 			    size_t len)

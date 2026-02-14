@@ -3,9 +3,11 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <limits.h>
 #include <libubox/uloop.h>
 #include <stdbool.h>
 #include <libubox/kvlist.h>
+#include <libubox/ulog.h>
 
 struct aqua_ctx;
 
@@ -32,6 +34,8 @@ struct device {
 	struct uloop_timeout data_expired;
 	struct kvlist properties;
 	const struct device_ops *ops;
+	struct kvlist *context_props;
+	void *priv;
 	const char *name;
 	uint8_t addr;
 	int data_valid : 1;
@@ -57,6 +61,42 @@ extern const struct device_ops rs_panel_ops;
 static inline uint16_t read16_le(const uint8_t *raw)
 {
 	return (uint16_t)raw[1] << 8 | raw[0];
+}
+
+
+// void kvlist_init(struct kvlist *kv, int (*get_len)(struct kvlist *kv, const void *data));
+// void kvlist_free(struct kvlist *kv);
+// void *kvlist_get(struct kvlist *kv, const char *name);
+// bool kvlist_set(struct kvlist *kv, const char *name, const void *data);
+// bool kvlist_delete(struct kvlist *kv, const char *name);
+//
+// int kvlist_strlen(struct kvlist *kv, const void *data);
+// int kvlist_blob_len(struct kvlist *kv, const void *data);
+
+static inline int prop_get_int(struct device *dev, const char *name)
+{
+	struct property *prop = kvlist_get(dev->context_props, name);
+
+	if (!prop || prop->type != PROP_INT) {
+		ULOG_ERR("OOPS, can't find property %s\n", name);
+		return -INT_MAX;
+	}
+
+	return prop->ival;
+}
+
+static inline int prop_set_int(struct device *dev, const char *name, int val)
+{
+	struct property *prop = kvlist_get(dev->context_props, name);
+
+	if (!prop || prop->type != PROP_INT) {
+		ULOG_ERR("OOPS, can't find property %s\n", name);
+		return -INT_MAX;
+	}
+
+	prop->ival = val;
+
+	return 0;
 }
 
 #endif /* AQUALINK_INTRERNAL_H */
