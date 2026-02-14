@@ -47,6 +47,7 @@ static int jxi_handle_measurements(struct device *dev,
 	return 0;
 }
 
+
 static int jxi_handle_reply(struct device *dev, const uint8_t *reply,
 			    size_t len)
 {
