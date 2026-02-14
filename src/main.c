@@ -245,8 +245,10 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 	dev_addr = request->buf[2];
 
 	slave = lookup_slave(ctx, dev_addr);
-	if (!slave)
+	if (!slave) {
+		dump_sump("requien", request->buf, request->len);
 		return -ENODEV;
+	}
 
 	cmd = reply[1];
 	switch (cmd) {
@@ -254,8 +256,10 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 		if (!slave->connected)
 			ULOG_INFO("Established connection to device at 0x%x\n",
 				  dev_addr);
+
 		slave->connected = 1;
 		slave->data_expired.cb = dev_clear_okay;
+
 		if (len == 2)
 			break;
 		/* fall through */
