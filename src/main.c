@@ -394,12 +394,12 @@ static int rs485_stream_open(char *path, struct ustream_fd *s)
 static void properties_dump(struct aqua_ctx *ctx)
 {
 	struct property *datum;
-	struct kvlist props;
 	const char *name;
 
-	kvlist_for_each(&props, name, datum) {
+	kvlist_for_each(&ctx->properties, name, datum) {
 		switch (datum->type) {
 		case PROP_INT:
+			ULOG_INFO("\t\"%s\" : %d\n", name, datum->ival);
 			break;
 		case PROP_FLOAT:
 			break;
@@ -412,8 +412,6 @@ static void properties_dump(struct aqua_ctx *ctx)
 			break;
 		}
 	}
-
-	exit(1);
 }
 
 static void probe_bus(struct uloop_timeout *t)

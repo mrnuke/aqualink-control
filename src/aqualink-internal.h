@@ -73,9 +73,10 @@ static inline uint16_t read16_le(const uint8_t *raw)
 // int kvlist_strlen(struct kvlist *kv, const void *data);
 // int kvlist_blob_len(struct kvlist *kv, const void *data);
 
-static inline int prop_get_int(struct device *dev, const char *name)
+
+static inline int _get_int(struct kvlist *kvl, const char *name)
 {
-	struct property *prop = kvlist_get(dev->context_props, name);
+	struct property *prop = kvlist_get(kvl, name);
 
 	if (!prop || prop->type != PROP_INT) {
 		ULOG_ERR("OOPS, can't find property %s\n", name);
@@ -85,9 +86,19 @@ static inline int prop_get_int(struct device *dev, const char *name)
 	return prop->ival;
 }
 
-static inline int prop_set_int(struct device *dev, const char *name, int val)
+static inline int dev_get_int(struct device *dev, const char *name)
 {
-	struct property *prop = kvlist_get(dev->context_props, name);
+	return _get_int(&dev->properties, name);
+}
+
+static inline int prop_get_int(struct device *dev, const char *name)
+{
+	return _get_int(dev->context_props, name);
+}
+
+static inline int _set_int(struct kvlist *kvl, const char *name, int val)
+{
+	struct property *prop = kvlist_get(kvl, name);
 
 	if (!prop || prop->type != PROP_INT) {
 		ULOG_ERR("OOPS, can't find property %s\n", name);
@@ -97,6 +108,16 @@ static inline int prop_set_int(struct device *dev, const char *name, int val)
 	prop->ival = val;
 
 	return 0;
+}
+
+static inline int dev_set_int(struct device *dev, const char *name, int val)
+{
+	return _set_int(&dev->properties, name, val);
+}
+
+static inline int prop_set_int(struct device *dev, const char *name, int val)
+{
+	return _set_int(dev->context_props, name, val);
 }
 
 #endif /* AQUALINK_INTRERNAL_H */

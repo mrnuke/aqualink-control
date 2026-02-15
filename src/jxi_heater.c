@@ -44,20 +44,12 @@ static int jxi_handle_control_response(struct device *dev,
 static int jxi_handle_measurements(struct device *dev,
 				   const uint8_t *msg, size_t len)
 {
-	uint16_t gv_on_time, cycles;
-	int temperature;
-
 	if (len < 9)
 		return -ENODATA;
 
-	gv_on_time = read16_le(msg + 2);
-	cycles = read16_le(msg + 4);
-	temperature = (int)msg[8] - 20;
-
-	prop_set_int(dev, "water_temp", temperature);
-
-	ULOG_INFO("%d cycles, %d hours, temperature = %d\n", cycles, gv_on_time,
-		  temperature);
+	prop_set_int(dev, "water_temp", (int)msg[8] - 20);
+	dev_set_int(dev, "gv_on_time", read16_le(msg + 2));
+	dev_set_int(dev, "ignition_cycles", read16_le(msg + 4));
 
 	return 0;
 }
@@ -121,6 +113,7 @@ int jxi_init_properties(struct device *dev)
 		{ "ext_temp_valid", PROP_BOOL},
 		{ "external_temp_reading", PROP_INT },
 		{ "gv_on_time", PROP_INT },
+		{ "ignition_cycles", PROP_INT },
 		{ "heater_error", PROP_BOOL},
 		{ "heater_on", PROP_BOOL},
 		{ "last_fault", PROP_INT },
@@ -131,7 +124,6 @@ int jxi_init_properties(struct device *dev)
 		{ "setpoint_spa", PROP_INT },
 		{ "spa", PROP_BOOL},
 		// { "status_flags': 0,
-		{ "timeout'", PROP_INT },
 		{ "water_temp", PROP_INT },
 	};
 
