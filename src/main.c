@@ -124,13 +124,9 @@ static void rs485_no_response(struct uloop_timeout *t)
 {
 	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, rs485_timeout);
 	struct rs485_frame *request;
-	uint8_t slave_addr;
 
 	request = list_first_entry(&ctx->pending_frames, struct rs485_frame,
 				   list);
-	slave_addr = request->buf[2];
-
-	ULOG_ERR("RS-485 timeout on request to device addr 0x%x\n", slave_addr);
 
 	/* Move on, as we no longer expect a response to this request. */
 	list_del(&request->list);
@@ -225,6 +221,9 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 	cmd = reply[1];
 	switch (cmd) {
 	case AQUA_PROBE_RESPONSE:
+		if (!slave->connected)
+			ULOG_INFO("Established connection to device at 0x%x\n",
+				  dev_addr);
 		slave->connected = 1;
 		slave->data_expired.cb = dev_clear_okay;
 		break;
