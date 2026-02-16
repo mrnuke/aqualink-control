@@ -30,9 +30,20 @@ enum panel_commands {
 	RS_MULTI_STRING = 0x04,
 };
 
+enum menu_state {
+	MENU_IDLE,
+	MENU_ENTERED,
+	MENU_TEMPERED,
+	MENU_LOST_TEMPER,
+};
+
+
 struct panel {
 	enum comm_state comm_state;
 	enum panel_state pstate;
+	enum panel_state b4;
+	enum panel_state rite_now;
+	enum menu_state ms;
 	char str_buf[STRING_MAX_CHARS];
 	int str_msg_idx;
 	uint8_t last_btn;
@@ -41,6 +52,7 @@ struct panel {
 static struct panel bad_idea = {
 	.comm_state = COMM_IDLE,
 	.pstate = PANEL_IDLE,
+	.ms = MENU_IDLE,
 };
 
 const char *button_names[] = {
@@ -86,6 +98,7 @@ static const char *btn_name_get(unsigned int btn_code)
 static int panel_handle_ack(struct device *dev, const uint8_t *msg, size_t len)
 {
 	uint8_t ack_flags, btn_code;
+	struct panel *panel = &bad_idea;
 
 	if (len < 4)
 		return -ENODATA;
@@ -101,6 +114,22 @@ static int panel_handle_ack(struct device *dev, const uint8_t *msg, size_t len)
 		return 0;
 
 	ULOG_INFO("Button '%s' (0x%x) pressed\n", btn_name_get(btn_code), btn_code);
+	switch (btn_code) {
+	case 0x09:
+		panel->ms = MENU_ENTERED;
+		break;
+	case 0x0e:
+		panel->ms = MENU_IDLE;
+		break;
+	}
+
+	if (panel->comm_state == COMM_IDLE || panel->ms != MENU_IDLE) {
+		panel->last_btn = btn_code;
+	} else {
+		ULOG_ERR("The heck? Was not ready for button event\n");
+		panel->ms = MENU_IDLE;
+	}
+
 	return 0;
 }
 
@@ -210,11 +239,34 @@ static int send_display_string(struct panel *panel, uint8_t* buf, size_t len,
 	return ret;
 }
 
+static int menu_while_menu(struct panel *panel, uint8_t* msg, size_t len)
+{
+	int ret = 0;
+
+	switch (panel->last_btn) {
+	case 0x09:
+		ret = send_display_string(panel, msg, len, "PRESS ENTER* TO SELECT");
+		break;
+	case 0x18:
+		ret = send_display_string(panel, msg, len, "SET TEMP");
+		break;
+	case 0x1d:
+		ret = send_display_string(panel, msg, len, "SET POOL TEMP");
+		break;
+	default:
+		ret = 0;
+		break;
+	}
+
+	panel->last_btn = 0;
+
+	return ret;
+}
+
 static int panel_get_next_request(struct device *dev, uint8_t *buf, size_t len)
 {
 	struct panel *panel = dev_to_panel(dev);
-
-	int temperature;
+	int rtx, temperature;
 	char moo[32];
 
 	switch (panel->comm_state) {
@@ -238,6 +290,18 @@ static int panel_get_next_request(struct device *dev, uint8_t *buf, size_t len)
 		temperature = prop_get_int(dev, "water_temp");
 		snprintf(moo, 32, "POOL TEMP %d°C", temperature);
 		return send_display_string(panel, buf, len, moo);
+	}
+
+	switch (panel->ms) {
+		case MENU_ENTERED:
+		case MENU_TEMPERED:
+		case MENU_LOST_TEMPER:
+			rtx = menu_while_menu(panel, buf, len);
+			if (rtx == 0)
+				rtx = send_led_status(dev, buf);
+		return rtx;
+		default:
+			/* Carry on my hayward son, don't you jandy more. */
 	}
 
 	return -ENODEV;

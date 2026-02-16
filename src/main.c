@@ -245,8 +245,10 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 	dev_addr = request->buf[2];
 
 	slave = lookup_slave(ctx, dev_addr);
-	if (!slave)
+	if (!slave) {
+		dump_sump("requien", request->buf, request->len);
 		return -ENODEV;
+	}
 
 	cmd = reply[1];
 	switch (cmd) {
@@ -254,8 +256,10 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 		if (!slave->connected)
 			ULOG_INFO("Established connection to device at 0x%x\n",
 				  dev_addr);
+
 		slave->connected = 1;
 		slave->data_expired.cb = dev_clear_okay;
+
 		if (len == 2)
 			break;
 		/* fall through */
@@ -440,6 +444,42 @@ static void probe_bus(struct uloop_timeout *t)
 
 	uloop_timeout_set(t, 2 * 1000);
 }
+#include <sys/socket.h>
+#include <sys/unistd.h>
+static void handle_socket(struct uloop_fd *u, unsigned int events)
+{
+	char *curr, *next, in_buf[200];
+	ssize_t len;
+	FILE *bile;
+	int cfd;
+
+	if (!(events & ULOOP_READ)) {
+		printf("eventesis %d\n", events);
+		return;
+	}
+
+	cfd = accept(u->fd, NULL, NULL);
+	bile = fdopen(cfd, "w");
+	len = recv(cfd, in_buf, sizeof(in_buf) - 1, 0);
+	if (len < 0) {
+		printf("Oh scheibe");
+	}
+	in_buf[len] = '\0';
+
+	curr = in_buf;
+	while (curr) {
+		next = memchr(in_buf, ' ', len);
+		if (next)
+			*next = '\0';
+
+		if (!strcmp(curr, "status")) {
+			fprintf(bile, "crapdraft\n");
+		}
+		curr = next;
+	};
+	fprintf(bile, "beep boop!\n");
+	fclose(bile);
+}
 
 static int handle_slave_request(struct aqua_ctx *ctx, struct device *dev)
 {
@@ -488,43 +528,6 @@ static void handle_connected_devices(struct uloop_timeout *t)
 	}
 
 	uloop_timeout_set(t, 500);
-}
-
-#include <sys/socket.h>
-#include <sys/unistd.h>
-static void handle_socket(struct uloop_fd *u, unsigned int events)
-{
-	char *curr, *next, in_buf[200];
-	ssize_t len;
-	FILE *bile;
-	int cfd;
-
-	if (!(events & ULOOP_READ)) {
-		printf("eventesis %d\n", events);
-		return;
-	}
-
-	cfd = accept(u->fd, NULL, NULL);
-	bile = fdopen(cfd, "w");
-	len = recv(cfd, in_buf, sizeof(in_buf) - 1, 0);
-	if (len < 0) {
-		printf("Oh scheibe");
-	}
-	in_buf[len] = '\0';
-
-	curr = in_buf;
-	while (curr) {
-		next = memchr(in_buf, ' ', len);
-		if (next)
-			*next = '\0';
-
-		if (!strcmp(curr, "status")) {
-			fprintf(bile, "crapdraft\n");
-		}
-		curr = next;
-	};
-	fprintf(bile, "beep boop!\n");
-	fclose(bile);
 }
 
 static void hackus_proppus(struct aqua_ctx *ctx)
