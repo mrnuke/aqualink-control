@@ -49,6 +49,11 @@ struct panel {
 	uint8_t last_btn;
 };
 
+struct menulizer {
+	const char *enamel;
+	struct menulizer *submenus;
+};
+
 static struct panel bad_idea = {
 	.comm_state = COMM_IDLE,
 	.pstate = PANEL_IDLE,
