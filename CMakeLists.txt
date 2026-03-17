@@ -22,6 +22,7 @@ add_executable(aquamasterd
 	src/main.c
 	src/jxi_heater.c
 	src/property.c
+	src/rs_allbutton_panel.c
 )
 target_link_libraries(aquamasterd ubox-static)
 
