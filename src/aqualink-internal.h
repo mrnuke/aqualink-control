@@ -75,6 +75,7 @@ const char *prop_get_string(struct device *dev, const char *name);
 int prop_set_string(struct device *dev, const char *name, const char *string);
 
 extern const struct device_ops jxi_heater_ops;
+extern const struct device_ops rs_panel_ops;
 
 static inline uint16_t read16_le(const uint8_t *raw)
 {

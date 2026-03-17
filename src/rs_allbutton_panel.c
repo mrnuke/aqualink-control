@@ -1,0 +1,232 @@
+#include "aqualink-internal.h"
+
+#include <errno.h>
+#include <libubox/utils.h>
+#include <libubox/ulog.h>
+#include <stdio.h>
+#include <string.h>
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define STRING_CHUNK_SIZE		16
+#define STRING_MAX_CHUNKS		4
+#define STRING_MAX_CHARS	(STRING_CHUNK_SIZE * STRING_MAX_CHUNKS)
+
+enum comm_state {
+	COMM_IDLE,
+	COMM_MULTI_STRING,
+};
+
+enum panel_state {
+	PANEL_IDLE,
+	PANEL_SEND_STATUS,
+	PANEL_SEND_HELLO,
+	PANEL_SEND_TEMPERATURE,
+};
+
+enum panel_commands {
+	RS_ACK_WITH_DATA = 0x01,
+	RS_LED_STATE = 0x02,
+	RS_STRING = 0x03,
+	RS_MULTI_STRING = 0x04,
+};
+
+struct panel {
+	enum comm_state comm_state;
+	enum panel_state pstate;
+	char str_buf[STRING_MAX_CHARS];
+	uint64_t led_state;
+	int str_msg_idx;
+	uint8_t last_btn;
+};
+
+static struct panel bad_idea = {
+	.comm_state = COMM_IDLE,
+	.pstate = PANEL_IDLE,
+};
+
+const char *button_names[] = {
+	[0x01] = "spa",
+	[0x02] = "pool",
+	[0x05] = "aux1",
+	[0x06] = "aux4",
+	[0x09] = "menu",
+	[0x0a] = "aux2",
+	[0x0b] = "aux5",
+	[0x0e] = "menu exit",
+	[0x0f] = "aux3",
+	[0x10] = "aux6",
+	[0x12] = "pool heat",
+	[0x15] = "aux7",
+	[0x17] = "spa heat",
+	[0x18] = "menu updn",
+	[0x1c] = "aux extra",
+	[0x1d] = "menu enter",
+};
+
+static struct panel *dev_to_panel(struct device *dev)
+{
+	(void)dev;
+
+	return &bad_idea;
+}
+
+static const char *btn_name_get(unsigned int btn_code)
+{
+
+	if (!btn_code || btn_code >= ARRAY_SIZE(button_names))
+		return NULL;
+
+	return button_names[btn_code];
+}
+
+static int panel_handle_ack(struct device *dev, const uint8_t *msg, size_t len)
+{
+	uint8_t ack_flags, btn_code;
+
+	if (len < 4)
+		return -ENODATA;
+
+	ack_flags = msg[2];
+	btn_code = msg[3];
+
+	if (ack_flags & 0x01) {
+		ULOG_INFO("Panel wants atencion\n");
+	}
+
+	if (!btn_code)
+		return 0;
+
+	ULOG_INFO("Button '%s' (0x%x) pressed\n", btn_name_get(btn_code), btn_code);
+	return 0;
+}
+
+static int send_led_status(const struct panel *panel, uint8_t* buf, size_t len)
+{
+	buf[1] = RS_LED_STATE;
+	buf[2] = (panel->led_state  >> 0) & 0xFF;
+	buf[3] = (panel->led_state  >> 8) & 0xFF;
+	buf[4] = (panel->led_state  >> 16) & 0xFF;
+	buf[5] = (panel->led_state  >> 24) & 0xFF;
+	buf[6] = (panel->led_state  >> 32) & 0xFF;
+
+	return 7;
+}
+
+static int panel_handle_reply(struct device *dev, const uint8_t *reply,
+			    size_t len)
+{
+	uint8_t cmd = reply[1];
+	int ret;
+
+	switch (cmd) {
+	case RS_ACK_WITH_DATA:
+		ret = panel_handle_ack(dev, reply, len);
+		break;
+	default:
+		ret = -EBADRQC;
+		break;
+	}
+
+	return ret;
+}
+
+int panel_init_properties(struct device *dev)
+{
+	return 0;
+}
+
+static int fill_string_packet(uint8_t* buf, size_t buf_len,
+			      const char *str, size_t str_len, uint8_t index)
+{
+	if (buf_len < (str_len + 3))
+		return -ENOSPC;
+
+	buf[1] = RS_STRING;
+	buf[2] = index;
+	memcpy(buf + 3, str, str_len);
+
+	return 3 + str_len;
+}
+
+static int fill_multipart_string(struct device *dev, uint8_t* msg, size_t len)
+{
+	/* Shouldn't we be sending all the strings from one function? */
+	struct panel *panel = &bad_idea;
+	int ret, start_idx, end_idx, str_len, how_much;
+
+	str_len = strlen(panel->str_buf) + 1;
+	start_idx = panel->str_msg_idx * STRING_CHUNK_SIZE;
+	end_idx = start_idx + STRING_CHUNK_SIZE;
+	if (end_idx >= str_len) {
+		end_idx = str_len;
+		/* This is the last packet */
+		panel->comm_state = COMM_IDLE;
+	}
+
+	how_much = min(str_len - start_idx, STRING_CHUNK_SIZE);
+
+	ret = fill_string_packet(msg, len, panel->str_buf + start_idx,
+				 how_much, ++panel->str_msg_idx);
+	msg[1] = RS_MULTI_STRING;
+	return ret;
+}
+
+static int send_display_string(struct panel *panel, uint8_t* buf, size_t len,
+			       const char *str)
+{
+	size_t num_chars = strlen(str);
+	int ret;
+
+	if (num_chars < STRING_CHUNK_SIZE) {
+		return fill_string_packet(buf, len, str, num_chars, 0);
+	} else if (num_chars >= STRING_MAX_CHARS) {
+		return -E2BIG;
+	}
+
+	panel->comm_state = COMM_MULTI_STRING;
+	strcpy(panel->str_buf, str);
+	panel->str_msg_idx = 0;
+	ret = fill_string_packet(buf, len, str, STRING_CHUNK_SIZE,
+				 ++panel->str_msg_idx);
+	buf[1] = RS_MULTI_STRING;
+	return ret;
+}
+
+static int panel_get_next_request(struct device *dev, uint8_t *buf, size_t len)
+{
+	struct panel *panel = dev_to_panel(dev);
+
+	int temperature;
+	char moo[32];
+
+	switch (panel->comm_state) {
+	case COMM_MULTI_STRING:
+		return fill_multipart_string(dev, buf, len);
+	default:
+		break;
+	}
+
+	switch (panel->pstate) {
+	default: /* fall through */
+	case PANEL_IDLE:
+		panel->pstate = PANEL_SEND_HELLO;
+		return send_display_string(panel, buf, len, "Aqua Master!");
+	case PANEL_SEND_TEMPERATURE: /* fall through */
+	case PANEL_SEND_HELLO:
+		panel->pstate = PANEL_SEND_STATUS;
+		return send_led_status(panel, buf, len);
+	case PANEL_SEND_STATUS:
+		panel->pstate = PANEL_SEND_TEMPERATURE;
+		temperature = prop_get_int(dev, "water_temp");
+		snprintf(moo, 32, "POOL TEMP %d°C", temperature);
+		return send_display_string(panel, buf, len, moo);
+	}
+
+	return -ENODEV;
+}
+
+const struct device_ops rs_panel_ops = {
+	.init_properties = panel_init_properties,
+	.handle_reply = panel_handle_reply,
+	.get_next_request = panel_get_next_request,
+};
