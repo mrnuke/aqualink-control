@@ -37,6 +37,20 @@ enum menu_state {
 	MENU_LOST_TEMPER,
 };
 
+enum leds {
+	LED_AUX7		= (1 << 0),
+	LED_AUX3		= (1 << 4),
+	LED_AUX2		= (1 << 6),
+	LED_AUX1		= (1 << 8),
+	LED_SPA			= (1 << 10),
+	LED_PUMP		= (1 << 12),
+	LED_AUX5		= (1 << 14),
+	LED_AUX4		= (1 << 16),
+	LED_AUX6		= (1 << 22),
+	LED_POOL_HEAT		= (1 << 28),
+	LED_SPA_HEAT		= ((uint64_t)1 << 32),
+	LED_EXTRA_AUX		= ((uint64_t)1 << 36),
+};
 
 struct panel {
 	enum comm_state comm_state;
@@ -44,6 +58,7 @@ struct panel {
 	enum panel_state b4;
 	enum panel_state rite_now;
 	enum menu_state ms;
+	struct prop_watcher mode_changed;
 	char str_buf[STRING_MAX_CHARS];
 	uint64_t led_state;
 	int str_msg_idx;
@@ -89,7 +104,6 @@ static struct panel *dev_to_panel(struct device *dev)
 
 static const char *btn_name_get(unsigned int btn_code)
 {
-
 	if (!btn_code || btn_code >= ARRAY_SIZE(button_names))
 		return NULL;
 
@@ -99,6 +113,7 @@ static const char *btn_name_get(unsigned int btn_code)
 static int panel_handle_ack(struct device *dev, const uint8_t *msg, size_t len)
 {
 	uint8_t ack_flags, btn_code;
+	const char *btn_name;
 	struct panel *panel = &bad_idea;
 
 	if (len < 4)
@@ -114,13 +129,17 @@ static int panel_handle_ack(struct device *dev, const uint8_t *msg, size_t len)
 	if (!btn_code)
 		return 0;
 
-	ULOG_INFO("Button '%s' (0x%x) pressed\n", btn_name_get(btn_code), btn_code);
+	btn_name = btn_name_get(btn_code);
+	ULOG_INFO("Button '%s' (0x%x) pressed\n", btn_name, btn_code);
 	switch (btn_code) {
 	case 0x09:
 		panel->ms = MENU_ENTERED;
 		break;
 	case 0x0e:
 		panel->ms = MENU_IDLE;
+		break;
+	default:
+		prop_set_string(dev, "button_pressed", btn_name);
 		break;
 	}
 
@@ -164,8 +183,30 @@ static int panel_handle_reply(struct device *dev, const uint8_t *reply,
 	return ret;
 }
 
+static void something_happened(struct prop_watcher *pw, const char *name,
+			       const struct property *prop)
+{
+	struct panel *panel = container_of(pw, struct panel, mode_changed);
+
+	panel->led_state &= ~(LED_POOL_HEAT | LED_SPA_HEAT);
+
+	if (!strcmp(prop->datum.string, "spa")) {
+		panel->led_state |= LED_SPA_HEAT;
+	} else if (!strcmp(prop->datum.string, "pool")) {
+		panel->led_state |= LED_POOL_HEAT;
+	}
+
+	ULOG_INFO("Polla cuchi LED=0x%lx\n", panel->led_state);
+}
+
+
 int panel_init_properties(struct device *dev)
 {
+	struct panel *panel = dev_to_panel(dev);
+
+	panel->mode_changed.notify_change = something_happened;
+	prop_add_watcher(dev, "heating_mode", &panel->mode_changed);
+
 	return 0;
 }
 
@@ -285,7 +326,7 @@ static int panel_get_next_request(struct device *dev, uint8_t *buf, size_t len)
 		case MENU_LOST_TEMPER:
 			rtx = menu_while_menu(panel, buf, len);
 			if (rtx == 0)
-				rtx = send_led_status(dev, buf);
+				rtx = send_led_status(panel, buf, len);
 		return rtx;
 		default:
 			/* Carry on my hayward son, don't you jandy more. */

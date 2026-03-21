@@ -76,6 +76,16 @@ static int jxi_get_next_request(struct device *dev, uint8_t* msg, size_t len)
 	return 2;
 }
 
+void notify_mammamia(struct prop_watcher *pw, const char *name,
+		     const struct property *prop)
+{
+	ULOG_INFO("%s set to to %s\n", name, prop->datum.string);
+}
+
+static struct prop_watcher pw = {
+	.notify_change = notify_mammamia,
+};
+
 int jxi_init_properties(struct device *dev)
 {
 	struct property prop_uno;
@@ -110,6 +120,8 @@ int jxi_init_properties(struct device *dev)
 		prop_uno.type = propellers[i].type;
 		kvlist_set(&dev->properties, propellers[i]. name, &prop_uno);
 	}
+
+	prop_add_watcher(dev, "heating_mode" ,&pw);
 
 	return 0;
 }
