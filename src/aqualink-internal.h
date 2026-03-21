@@ -3,11 +3,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <limits.h>
 #include <libubox/uloop.h>
 #include <stdbool.h>
 #include <libubox/kvlist.h>
-#include <libubox/ulog.h>
 
 struct property {
 	enum {
@@ -34,7 +32,6 @@ struct device {
 	struct kvlist properties;
 	const struct device_ops *ops;
 	struct kvlist *context_props;
-	void *priv;
 	const char *name;
 	uint8_t addr;
 	int data_valid : 1;

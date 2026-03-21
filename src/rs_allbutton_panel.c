@@ -120,6 +120,12 @@ static int panel_handle_ack(struct device *dev, const uint8_t *msg, size_t len)
 
 	ULOG_INFO("Button '%s' (0x%x) pressed\n", btn_name_get(btn_code), btn_code);
 	switch (btn_code) {
+	case 0x01:
+		prop_set_int(dev, "mammamia", 12);
+		break;
+	case 0x02:
+		prop_set_int(dev, "mammamia", 69);
+		break;
 	case 0x09:
 		panel->ms = MENU_ENTERED;
 		break;

@@ -77,6 +77,15 @@ static int jxi_get_next_request(struct device *dev, uint8_t* msg, size_t len)
 	return 2;
 }
 
+void notify_mammamia(void *duuude, const char *name, struct property *prop)
+{
+	ULOG_WARN("Mammamia %s changeated\n", name);
+}
+
+static struct prop_watcher pw = {
+	.notify_change = notify_mammamia,
+};
+
 int jxi_init_properties(struct device *dev)
 {
 	struct property prop_uno;
@@ -111,6 +120,10 @@ int jxi_init_properties(struct device *dev)
 		prop_uno.type = propellers[i].type;
 		kvlist_set(&dev->properties, propellers[i]. name, &prop_uno);
 	}
+
+	INIT_LIST_HEAD(&pw.list);
+	prop_get_creepy(dev, "mammamia" ,&pw);
+
 
 	return 0;
 }

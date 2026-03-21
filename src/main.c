@@ -539,6 +539,7 @@ static void hackus_proppus(struct aqua_ctx *ctx)
 	prop_uno.type = PROP_INT;
 	kvlist_set(&ctx->properties, "pool_setpoint", &prop_uno);
 	kvlist_set(&ctx->properties, "water_temp", &prop_uno);
+	kvlist_set(&ctx->properties, "mammamia", &prop_uno);
 
 	/* kvlist_set creates a new copy, so we need to re-init the lists. */
 	kvlist_for_each(&ctx->properties, name, prop) {
