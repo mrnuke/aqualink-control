@@ -48,6 +48,7 @@ struct aqua_ctx {
 	struct uloop_timeout interframe_gap;
 	struct uloop_timeout rs485_timeout;
 	struct list_head pending_frames;
+	struct prop_watcher button_happened;
 	struct kvlist properties;
 	struct device slaves[10];
 };
@@ -530,20 +531,63 @@ static void handle_connected_devices(struct uloop_timeout *t)
 	uloop_timeout_set(t, 500);
 }
 
+static void update_heat_mode(struct aqua_ctx *ctx, const char *new_mode)
+{
+	const char *curr_mode;
+
+	struct device fake_dev = {
+		.context_props = &ctx->properties,
+	};
+
+	curr_mode = prop_get_string(&fake_dev, "heating_mode");
+	if (!curr_mode || !strcmp(curr_mode, new_mode)) {
+		prop_set_string(&fake_dev, "heating_mode", "off");
+	} else {
+		prop_set_string(&fake_dev, "heating_mode", new_mode);
+	}
+
+}
+
+void handle_butts(struct prop_watcher *pw, const char *, const struct property *prop)
+{
+	struct aqua_ctx *ctx = container_of(pw, struct aqua_ctx, button_happened);
+	const char *btn_name = prop->datum.string;
+
+	ULOG_WARN("Buttonatta %s\n", btn_name);
+	if (!strcmp(btn_name, "spa heat")) {
+		update_heat_mode(ctx, "spa");
+	} else if (!strcmp(btn_name, "pool heat")) {
+		update_heat_mode(ctx, "pool");
+	}
+
+	// prop->datum.string = NULL;
+}
+
 static void hackus_proppus(struct aqua_ctx *ctx)
 {
-	struct property prop_uno = {0} ;
+	struct device fake_dev = {
+		.context_props = &ctx->properties,
+	};
+	struct property prop_uno = {0};
 	struct property *prop;
 	const char *name;
 
 	prop_uno.type = PROP_INT;
 	kvlist_set(&ctx->properties, "pool_setpoint", &prop_uno);
 	kvlist_set(&ctx->properties, "water_temp", &prop_uno);
+	kvlist_set(&ctx->properties, "mammamia", &prop_uno);
+
+	prop_uno.type = PROP_STRING;
+	kvlist_set(&ctx->properties, "button_pressed", &prop_uno);
+	kvlist_set(&ctx->properties, "heating_mode", &prop_uno);
 
 	/* kvlist_set creates a new copy, so we need to re-init the lists. */
 	kvlist_for_each(&ctx->properties, name, prop) {
 		INIT_LIST_HEAD(&prop->watchers);
 	}
+
+	ctx->button_happened.notify_change = handle_butts;
+	prop_add_watcher(&fake_dev, "button_pressed", &ctx->button_happened);
 }
 
 int main(int argc, char *argv[])
