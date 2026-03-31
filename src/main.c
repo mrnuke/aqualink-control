@@ -539,11 +539,12 @@ static void update_heat_mode(struct aqua_ctx *ctx, const char *new_mode)
 	};
 
 	curr_mode = prop_get_string(&fake_dev, "heating_mode");
-	if (!curr_mode || !strcmp(curr_mode, new_mode)) {
-		prop_set_string(&fake_dev, "heating_mode", "off");
-	} else {
+	if (!curr_mode || strcmp(curr_mode, new_mode)) {
 		prop_set_string(&fake_dev, "heating_mode", new_mode);
+	} else {
+		prop_set_string(&fake_dev, "heating_mode", "off");
 	}
+
 
 }
 
@@ -551,12 +552,26 @@ void handle_butts(struct prop_watcher *pw, const char *, const struct property *
 {
 	struct aqua_ctx *ctx = container_of(pw, struct aqua_ctx, button_happened);
 	const char *btn_name = prop->datum.string;
+	int i_aux, rmap;
+	struct device fake_dev = {
+		.context_props = &ctx->properties,
+	};
 
 	ULOG_WARN("Buttonatta %s\n", btn_name);
 	if (!strcmp(btn_name, "spa heat")) {
 		update_heat_mode(ctx, "spa");
 	} else if (!strcmp(btn_name, "pool heat")) {
 		update_heat_mode(ctx, "pool");
+	} else if (!strcmp(btn_name, "pump")) {
+		rmap = prop_get_int(&fake_dev, "relay_map");
+		rmap ^= (1 << 0);
+		prop_set_int(&fake_dev, "relay_map", rmap);
+	} else if (!strncmp(btn_name, "aux", 3)) {
+		i_aux = atoi(btn_name + 3);
+		rmap = prop_get_int(&fake_dev, "relay_map");
+		ULOG_INFO("BAxuna matata %s - %d\n", btn_name, i_aux);
+		rmap ^= (1 << i_aux);
+		prop_set_int(&fake_dev, "relay_map", rmap);
 	}
 
 	// prop->datum.string = NULL;
@@ -575,6 +590,7 @@ static void hackus_proppus(struct aqua_ctx *ctx)
 	kvlist_set(&ctx->properties, "pool_setpoint", &prop_uno);
 	kvlist_set(&ctx->properties, "water_temp", &prop_uno);
 	kvlist_set(&ctx->properties, "mammamia", &prop_uno);
+	kvlist_set(&ctx->properties, "relay_map", &prop_uno);
 
 	prop_uno.type = PROP_STRING;
 	kvlist_set(&ctx->properties, "button_pressed", &prop_uno);
