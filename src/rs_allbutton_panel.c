@@ -53,12 +53,14 @@ enum leds {
 };
 
 struct panel {
+	struct device *dev;
 	enum comm_state comm_state;
 	enum panel_state pstate;
 	enum panel_state b4;
 	enum panel_state rite_now;
 	enum menu_state ms;
 	struct prop_watcher mode_changed;
+	struct prop_watcher leds_changed;
 	char str_buf[STRING_MAX_CHARS];
 	uint64_t led_state;
 	int str_msg_idx;
@@ -94,6 +96,11 @@ const char *button_names[] = {
 	[0x1c] = "aux extra",
 	[0x1d] = "menu enter",
 };
+
+static struct device *panel_to_dev(struct panel *panel)
+{
+	return panel->dev;
+}
 
 static struct panel *dev_to_panel(struct device *dev)
 {
@@ -183,6 +190,34 @@ static int panel_handle_reply(struct device *dev, const uint8_t *reply,
 	return ret;
 }
 
+
+static void led_happened(struct prop_watcher *pw, const char *name,
+			       const struct property *prop)
+{
+	struct panel *panel = container_of(pw, struct panel, leds_changed);
+	struct device *dev = panel_to_dev(panel);
+	if (!dev) {
+		ULOG_ERR("No es devos!\n");
+		return;
+	}
+	int rmap = prop->datum.ival;
+
+	int mask, i;
+	const int led_bits[] = {
+		LED_PUMP, LED_AUX1, LED_AUX2, LED_AUX3, LED_AUX4, LED_AUX5,
+		LED_AUX6, LED_AUX7
+	};
+
+	mask = (LED_PUMP | LED_AUX1 | LED_AUX2 | LED_AUX3 | LED_AUX4 |
+		LED_AUX5 | LED_AUX6 | LED_AUX7);
+
+	panel->led_state &= ~mask;
+	for (i = 0; i < ARRAY_SIZE(led_bits); i++) {
+		if (rmap & (1 << i))
+			panel->led_state |= led_bits[i];
+	}
+}
+
 static void something_happened(struct prop_watcher *pw, const char *name,
 			       const struct property *prop)
 {
@@ -202,10 +237,14 @@ static void something_happened(struct prop_watcher *pw, const char *name,
 
 int panel_init_properties(struct device *dev)
 {
+	/* Talk about circular logic. */
 	struct panel *panel = dev_to_panel(dev);
+	panel->dev = dev;
 
 	panel->mode_changed.notify_change = something_happened;
+	panel->leds_changed.notify_change = led_happened;
 	prop_add_watcher(dev, "heating_mode", &panel->mode_changed);
+	prop_add_watcher(dev, "relay_map", &panel->leds_changed);
 
 	return 0;
 }
