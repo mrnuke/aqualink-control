@@ -47,6 +47,7 @@ struct aqua_ctx {
 	struct uloop_timeout device_work;
 	struct uloop_timeout interframe_gap;
 	struct uloop_timeout rs485_timeout;
+	struct uloop_timeout relay_flipper;
 	struct list_head pending_frames;
 	struct prop_watcher button_happened;
 	struct kvlist properties;
@@ -563,6 +564,33 @@ void handle_butts(struct prop_watcher *pw, const char *, const struct property *
 	// prop->datum.string = NULL;
 }
 
+static void relay_flip_off(struct uloop_timeout *t)
+{
+	struct aqua_ctx *ctx = container_of(t, struct aqua_ctx, relay_flipper);
+	struct device fake_dev = {
+		.context_props = &ctx->properties,
+	};
+	int rmap;
+
+	rmap = prop_get_int(&fake_dev, "aux_relay_map");
+	switch (rmap & 0x03) {
+	case 0:
+		rmap = 1;
+		break;
+	case 1:
+		rmap = 3;
+		break;
+	case 2:
+		rmap = 2;
+		break;
+	case 3:
+		rmap = 0;
+		break;
+	}
+
+	prop_set_int(&fake_dev, "aux_relay_map", rmap);
+}
+
 static void hackus_proppus(struct aqua_ctx *ctx)
 {
 	struct device fake_dev = {
@@ -576,6 +604,7 @@ static void hackus_proppus(struct aqua_ctx *ctx)
 	kvlist_set(&ctx->properties, "pool_setpoint", &prop_uno);
 	kvlist_set(&ctx->properties, "water_temp", &prop_uno);
 	kvlist_set(&ctx->properties, "mammamia", &prop_uno);
+	kvlist_set(&ctx->properties, "aux_relay_map", &prop_uno);
 
 	prop_uno.type = PROP_STRING;
 	kvlist_set(&ctx->properties, "button_pressed", &prop_uno);
@@ -588,6 +617,9 @@ static void hackus_proppus(struct aqua_ctx *ctx)
 
 	ctx->button_happened.notify_change = handle_butts;
 	prop_add_watcher(&fake_dev, "button_pressed", &ctx->button_happened);
+
+	ctx->relay_flipper.cb = relay_flip_off;
+	uloop_timeout_set(&ctx->relay_flipper, 2500);
 }
 
 int main(int argc, char *argv[])
