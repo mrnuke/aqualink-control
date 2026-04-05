@@ -4,6 +4,7 @@
 #include <libubox/utils.h>
 #include <libubox/ulog.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -104,9 +105,7 @@ static struct device *panel_to_dev(struct panel *panel)
 
 static struct panel *dev_to_panel(struct device *dev)
 {
-	(void)dev;
-
-	return &bad_idea;
+	return dev->priv;
 }
 
 static const char *btn_name_get(unsigned int btn_code)
@@ -237,8 +236,14 @@ static void something_happened(struct prop_watcher *pw, const char *name,
 
 int panel_init_properties(struct device *dev)
 {
+	struct panel *panel;
 	/* Talk about circular logic. */
-	struct panel *panel = dev_to_panel(dev);
+
+	panel = malloc(sizeof(*panel));
+	if (!panel)
+		return -ENOMEM;
+
+	dev->priv = panel;
 	panel->dev = dev;
 
 	panel->mode_changed.notify_change = something_happened;

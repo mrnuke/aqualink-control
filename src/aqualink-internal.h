@@ -36,6 +36,7 @@ struct device {
 	uint8_t addr;
 	int data_valid : 1;
 	int connected : 1;
+	void *priv;
 };
 
 struct prop_watcher {
