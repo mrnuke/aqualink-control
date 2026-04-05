@@ -633,6 +633,8 @@ int main(int argc, char *argv[])
 
 	INIT_LIST_HEAD(&ctx.pending_frames);
 
+
+	ret = add_slave(&ctx, 0x09, &rs_panel_ops);
 	ret = add_slave(&ctx, 0x0a, &rs_panel_ops);
 	ret = add_slave(&ctx, 0x68, &jxi_heater_ops);
 	if (ret) {
