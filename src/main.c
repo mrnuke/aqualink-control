@@ -237,10 +237,10 @@ static int aqualink_handle_msg(struct aqua_ctx *ctx,
 	return ret;
 }
 
-static int aqualink_handle_frame(struct aqua_ctx *ctx, uint8_t *frame,
-				 size_t len)
+static int aqualink_handle_frame(struct aqua_ctx *ctx,
+				 const struct rs485_frame *request,
+				 uint8_t *frame, size_t len)
 {
-	struct rs485_frame *request;
 	uint8_t buf[32];
 	int msg_len;
 
@@ -249,9 +249,6 @@ static int aqualink_handle_frame(struct aqua_ctx *ctx, uint8_t *frame,
 		ULOG_ERR("Error decoding frame: %d\n", msg_len);
 		return msg_len;
 	}
-
-	request = list_first_entry(&ctx->pending_frames, struct rs485_frame,
-				   list);
 
 	return aqualink_handle_msg(ctx, request, buf, msg_len);
 }
@@ -280,12 +277,6 @@ static void rs485_notify_read(struct ustream *s, int bytes)
 		return;
 	}
 
-	frame_len = end - start + sizeof(footer);
-	ret = aqualink_handle_frame(ctx, start, frame_len);
-	if (ret) {
-		ULOG_WARN("Unhandled frame (ret=%d)", ret);
-	}
-
 	if (list_empty(&ctx->pending_frames)) {
 		ULOG_ERR("Discarding unsolicited reply!\n");
 		return;
@@ -293,6 +284,13 @@ static void rs485_notify_read(struct ustream *s, int bytes)
 
 	request = list_first_entry(&ctx->pending_frames, struct rs485_frame,
 				   list);
+
+	frame_len = end - start + sizeof(footer);
+	ret = aqualink_handle_frame(ctx, request, start, frame_len);
+	if (ret) {
+		ULOG_WARN("Unhandled frame (ret=%d)", ret);
+	}
+
 	list_del(&request->list);
 
 	uloop_timeout_cancel(&ctx->rs485_timeout);
